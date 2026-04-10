@@ -6,6 +6,7 @@
 #include <string.h>
 #include <fcntl.h>
 
+#define LSH_RL_BUFSIZE 1024
 #define history_size 100
 char *history[history_size]= {NULL};
 int history_count =0;
@@ -33,6 +34,32 @@ int (*builtin_func[]) (char **) = {
   &lsh_exit
 };
 
+int lsh_find_pipe(char **args){
+    int i;
+    for(i=0;args[i]!=NULL;i++){
+        if(strcmp(args[i],"|")==0){
+            return i;
+        }
+    }
+    return -1;
+ 
+}
+
+void lsh_split_pipe(char **args,int pipe_index,char **left,char **right){
+    int i;
+    int pos=0;
+    for(i=0;i<pipe_index;i++){
+        left[i]=args[i];
+    }
+    left[i]=NULL;
+    for(i=pipe_index+1;args[i]!=NULL;i++){
+        right[pos++]=args[i];
+    }
+    right[pos]=NULL;
+}
+
+
+                    
 int lsh_find_redirect(char **args){
     int i;
 
@@ -100,23 +127,64 @@ int lsh_help(char **args)
   return 1;
 }
 
-/**
-   @brief Builtin command: exit.
-   @param args List of args.  Not examined.
-   @return Always returns 0, to terminate execution.
- */
 int lsh_exit(char **args)
 {
   return 0;
 }
 
-/**
-  @brief Launch a program and wait for it to terminate.
-  @param args Null terminated list of arguments (including program).
-  @return Always returns 1, to continue execution.
- */
 int lsh_launch(char **args)
 {
+  int pipe_index = lsh_find_pipe(args);
+    if(pipe_index != -1){
+    char **left = malloc(sizeof(char*) * LSH_RL_BUFSIZE);
+    char **right = malloc(sizeof(char*) * LSH_RL_BUFSIZE);
+    lsh_split_pipe(args, pipe_index, left, right);
+
+    int pipefd[2];
+    if(pipe(pipefd) == -1){
+        perror("lsh");
+        return 1;
+    }
+
+    pid_t pid1 = fork();
+    if(pid1 < 0){ perror("lsh"); return 1; }
+    if(pid1 == 0){
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execvp(left[0], left);
+        perror("lsh");
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t pid2 = fork();
+    if(pid2 < 0){ perror("lsh"); return 1; }
+    if(pid2 == 0){
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+        int redir_index=lsh_find_redirect(right);
+        if(redir_index!=-1){
+            int fd=lsh_handle_redirect(right, redir_index);
+            if(fd==-1){ exit(EXIT_FAILURE);}
+            dup2(fd,STDOUT_FILENO);
+            close(fd);
+            right[redir_index]=NULL;
+
+            }
+        execvp(right[0], right);
+        perror("lsh");
+        exit(EXIT_FAILURE);
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+    free(left);
+    free(right);
+    return 1;
+}
   pid_t pid, wpid;
   int status;
 
@@ -175,7 +243,6 @@ int lsh_execute(char **args)
   return lsh_launch(args);
 }
 
-#define LSH_RL_BUFSIZE 1024
 /**
    @brief Read a line of input from stdin.
    @return The line from stdin.

@@ -82,14 +82,19 @@ int lsh_history(char **args){
     return 1;
 }
 
-int lsh_handle_redirect(char **args,int redirect_index,int append){
+
+int lsh_handle_redirect(char **args,int redirect_index,int append,int redirect){
     if(args[redirect_index+1]==NULL){
-        fprintf(stderr,"lsh: Expected  filename after >\n");
+        fprintf(stderr,"lsh: Expected  filename after %s \n",args[redirect_index]);
         return -1;
     }
     int flag;
     if(append){
         flag=O_WRONLY | O_CREAT | O_APPEND;
+    }
+    else if(redirect){
+        flag=O_RDONLY;
+
     }
     else{
         flag=O_WRONLY | O_CREAT | O_TRUNC;
@@ -157,9 +162,18 @@ int lsh_launch(char **args)
     if(pid1 < 0){ perror("lsh"); return 1; }
     if(pid1 == 0){
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        execvp(left[0], left);
+       dup2(pipefd[1], STDOUT_FILENO);
+        int reindirect_index=lsh_find_redirect(left, "<");
+        if(reindirect_index!=-1){
+            int fd=lsh_handle_redirect(left, reindirect_index, 0, 1);    
+            if(fd!=-1){
+                    dup2(fd, STDIN_FILENO);
+                    close(fd);
+                     left[reindirect_index]=NULL;
+        
+            }
+        }
+       execvp(left[0], left);
         perror("lsh");
         exit(EXIT_FAILURE);
     }
@@ -173,7 +187,7 @@ int lsh_launch(char **args)
         int append_index=lsh_find_redirect(right, ">>");
         int redir_index=lsh_find_redirect(right,">");
         if (append_index!=-1){
-            int fd=lsh_handle_redirect(right, redir_index,1);
+            int fd=lsh_handle_redirect(right,append_index,1,0);
             if(fd==-1){ exit(EXIT_FAILURE);}
             dup2(fd,STDOUT_FILENO);
             close(fd);
@@ -181,7 +195,7 @@ int lsh_launch(char **args)
 
             }
         else if (redir_index!=-1) {
-             int fd=lsh_handle_redirect(right, redir_index,0);
+             int fd=lsh_handle_redirect(right, redir_index,0,0);
             if(fd==-1){ exit(EXIT_FAILURE);}
             dup2(fd,STDOUT_FILENO);
             close(fd);
@@ -209,8 +223,9 @@ int lsh_launch(char **args)
   if (pid == 0) {
     int append_index=lsh_find_redirect(args,">>");
     int redirect_index=lsh_find_redirect(args, ">");
+    int reindirect_index=lsh_find_redirect(args, "<");
     if (append_index!=-1){
-            int fd=lsh_handle_redirect(args,append_index,1);
+            int fd=lsh_handle_redirect(args,append_index,1,0);
             if(fd==-1){
                 exit(EXIT_FAILURE);
             }
@@ -219,16 +234,23 @@ int lsh_launch(char **args)
             args[append_index]=NULL;
     }
     else if(redirect_index!=-1){
-          int fd=lsh_handle_redirect(args,append_index,0);
+          int fd=lsh_handle_redirect(args,redirect_index,0,0);
             if(fd==-1){
                 exit(EXIT_FAILURE);
             }
             dup2(fd,STDOUT_FILENO);
             close(fd);
-            args[append_index]=NULL;
+            args[redirect_index]=NULL;
     }
-
-        
+    else if(reindirect_index!=-1){
+         int fd=lsh_handle_redirect(args,reindirect_index,0,1);
+            if(fd==-1){
+                exit(EXIT_FAILURE);
+            }
+            dup2(fd,STDIN_FILENO);
+            close(fd);
+            args[reindirect_index]=NULL;
+    }
         
     if (execvp(args[0], args) == -1) {
 
@@ -364,7 +386,7 @@ void lsh_loop(void)
     line = lsh_read_line();
     if(strlen(line)>0){
             int slot = history_count % history_size;
-            if(history[slot]==NULL){
+            if(history[slot]!=NULL){
                 free(history[slot]);
             }
             history[slot]=strdup(line);

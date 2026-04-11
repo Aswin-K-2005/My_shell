@@ -1,11 +1,25 @@
 
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
+#include <errno.h>
 
+volatile sig_atomic_t flag=0;
+volatile pid_t done_pid=0;
+
+void sigchld_handler(int sig){
+    int saved_errno = errno;
+    pid_t done;
+    while((done=waitpid(-1,NULL,WNOHANG))>0){
+    done_pid=done;
+    flag=1;   
+    }
+    errno = saved_errno;
+}
 #define LSH_RL_BUFSIZE 1024
 #define history_size 100
 char *history[history_size]= {NULL};
@@ -33,6 +47,17 @@ int (*builtin_func[]) (char **) = {
   &lsh_history,
   &lsh_exit
 };
+
+int lsh_is_background(char **args){
+        int i=0;
+        while(args[i]!=NULL){i++;}
+        if(i>0 &&strcmp(args[i-1],"&")==0){
+        args[i-1]=NULL;
+        return 1;
+    }
+    return 0;
+}
+
 
 int lsh_find_pipe(char **args){
     int i;
@@ -200,6 +225,7 @@ int lsh_launch(char **args)
     free(right);
     return 1;
 }
+  int is_background=lsh_is_background(args);
   pid_t pid, wpid;
   int status;
 
@@ -216,19 +242,18 @@ int lsh_launch(char **args)
     perror("lsh");
   } else {
     // Parent process
+    if(is_background){printf("[background] pid: %d\n",pid);}
+    else{
     do {
       wpid = waitpid(pid, &status, WUNTRACED);
     } while (!WIFEXITED(status) && !WIFSIGNALED(status));
   }
+}
 
   return 1;
 }
 
-/**
-   @brief Execute shell built-in or launch program.
-   @param args Null terminated list of arguments.
-   @return 1 if the shell should continue running, 0 if it should terminate
- */
+
 int lsh_execute(char **args)
 {
   int i;
@@ -246,11 +271,6 @@ int lsh_execute(char **args)
 
   return lsh_launch(args);
 }
-
-/**
-   @brief Read a line of input from stdin.
-   @return The line from stdin.
- */
 char *lsh_read_line(void)
 {
   int bufsize = LSH_RL_BUFSIZE;
@@ -338,6 +358,11 @@ void lsh_loop(void)
   do {
     printf("> ");
     line = lsh_read_line();
+    if (flag){
+        printf("\n[done] pid: %d\n",(int)done_pid);
+        flag=0;
+        done_pid=0;
+        }
     if(strlen(line)>0){
             int slot = history_count % history_size;
             if(history[slot]!=NULL){
@@ -363,7 +388,7 @@ void lsh_loop(void)
 int main(int argc, char **argv)
 {
   // Load config files, if any.
-
+  signal(SIGCHLD,sigchld_handler);    
   // Run command loop.
   lsh_loop();
 

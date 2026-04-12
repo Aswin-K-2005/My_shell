@@ -450,33 +450,45 @@ char **lsh_split_line(char *line)
 {
   int bufsize = LSH_TOK_BUFSIZE, position = 0;
   char **tokens = malloc(bufsize * sizeof(char*));
-  char *token;
-
-  if (!tokens) {
+  char *token =  malloc(LSH_RL_BUFSIZE);
+  int token_pos=0;
+  int in_quotes =0;
+  int i=0;
+  if (!tokens || !token) {
     fprintf(stderr, "lsh: allocation error\n");
     exit(EXIT_FAILURE);
   }
 
-  token = strtok(line, LSH_TOK_DELIM);
-  while (token != NULL) {
-    tokens[position] = token;
-    position++;
+  while (line[i] != '\0') {
+    char c = line[i];    
+    if( c=='"'){
+        in_quotes=!in_quotes;
 
-    if (position >= bufsize) {
-      bufsize += LSH_TOK_BUFSIZE;
-      tokens = realloc(tokens, bufsize * sizeof(char*));
-      if (!tokens) {
-        fprintf(stderr, "lsh: allocation error\n");
-        exit(EXIT_FAILURE);
-      }
+        }
+    else if(c==' ' && !in_quotes){
+        if(token_pos > 0){
+            token[token_pos]='\0';
+            tokens[position++] = strdup(token);
+            token_pos = 0;
+            if(position >= bufsize){
+                    bufsize+=LSH_TOK_BUFSIZE;
+                    tokens = realloc(tokens,bufsize*sizeof(char*));
+            }
+        }
     }
-
-    token = strtok(NULL, LSH_TOK_DELIM);
+    else{
+        token[token_pos++] = c;
+        }
+        i++;
   }
-  tokens[position] = NULL;
-  return tokens;
+  if(token_pos > 0){
+        token[token_pos] = '\0';
+        tokens[position++]=strdup(token);
+    }
+    tokens[position]=NULL;
+    free(token);
+    return tokens;
 }
-
 /**
    @brief Loop getting input and executing it.
  */

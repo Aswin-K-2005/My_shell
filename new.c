@@ -7,6 +7,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <termios.h>
 
 volatile sig_atomic_t flag=0;
 volatile pid_t done_pid=0;
@@ -24,6 +25,29 @@ void sigchld_handler(int sig){
 #define history_size 100
 char *history[history_size]= {NULL};
 int history_count =0;
+
+
+struct termios orig_termios;
+
+void disable_raw_mode(){
+    tcsetattr(STDIN_FILENO,TCSAFLUSH, &orig_termios);
+}
+
+void enable_raw_mode(){
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    atexit(disable_raw_mode);
+
+    struct termios raw = orig_termios;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+
+
+
+
+
+
 /*
   Function Declarations for builtin shell commands:
  */
@@ -271,6 +295,113 @@ int lsh_execute(char **args)
 
   return lsh_launch(args);
 }
+
+
+
+char *lsh_read_line_raw(void){
+  enable_raw_mode();  
+  int bufsize = LSH_RL_BUFSIZE;
+  int position = 0;
+  char *buffer = malloc(sizeof(char) * bufsize);
+  char *saved_buffer = malloc(sizeof(char) * bufsize);
+  if(!buffer || !saved_buffer){
+    fprintf(stderr, "lsh: allocation error\n");
+    exit(EXIT_FAILURE);
+}
+  saved_buffer[0]='\0';
+  buffer[0]='\0';
+  int c;
+  int  history_index=history_count;
+
+
+  if (!buffer) {
+    fprintf(stderr, "lsh: allocation error\n");
+    exit(EXIT_FAILURE);
+  }
+  printf("> ");
+  fflush(stdout);
+  while (1) {
+    // Read a character
+    c = getchar();
+
+    // If we hit EOF, replace it with a null character and return.
+    if (c == EOF || c == '\n') {
+      disable_raw_mode();
+      printf("\n");
+      buffer[position] = '\0';
+      free(saved_buffer);
+      return buffer;
+
+    }
+    else if(c==127){
+        if(position>0){
+            position--;
+            buffer[position]='\0';
+            printf("\r\033[K> %s",buffer);
+            fflush(stdout);
+    }
+    }
+    else if(c==27){
+            char seq[2];
+            seq[0]=getchar();
+            seq[1]=getchar();
+            if(seq[0]=='['){
+                if(seq[1] == 'A'){
+                 if(history_index>0){
+                    if(history_index == history_count){
+                            strncpy(saved_buffer, buffer, bufsize);
+                        }
+                        history_index--;
+                        strncpy(buffer, history[history_index],bufsize);
+                        position = strlen(buffer);
+                        printf("\r\033[K> %s", buffer);
+                        fflush(stdout);
+                    }
+                }
+             
+                else if(seq[1] == 'B'){
+                    if(history_index<history_count){
+                        history_index++;
+                        if(history_index==history_count){
+                            strncpy(buffer, saved_buffer, bufsize);
+                        }
+                        else{
+                        strncpy(buffer, history[history_index], bufsize);
+                    }
+                     position =strlen(buffer);
+                     printf("\r\033[K> %s",buffer);
+                     fflush(stdout);
+                    }
+                }
+
+                
+           
+        
+    
+}
+}
+
+    else {
+      buffer[position] = c;
+      position++;
+      printf("%c",c);
+      fflush(stdout);
+    }
+
+    // If we have exceeded the buffer, reallocate.
+    if (position >= bufsize) {
+      bufsize += LSH_RL_BUFSIZE;
+      buffer = realloc(buffer, bufsize);
+      if (!buffer) {
+        fprintf(stderr, "lsh: allocation error\n");
+        exit(EXIT_FAILURE);
+      }
+    }
+  }
+
+  
+}
+
 char *lsh_read_line(void)
 {
   int bufsize = LSH_RL_BUFSIZE;
@@ -356,8 +487,8 @@ void lsh_loop(void)
   int status;
 
   do {
-    printf("> ");
-    line = lsh_read_line();
+    
+    line = lsh_read_line_raw();
     if (flag){
         printf("\n[done] pid: %d\n",(int)done_pid);
         flag=0;

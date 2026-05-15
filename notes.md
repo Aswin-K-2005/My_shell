@@ -485,4 +485,7 @@ When something breaks, ask in this order:
 5. **Signal involved?** Check if global flags are being set/cleared correctly.
 
 ---
+## 15.Learnt about cursor control 
+added a cursor variable got some problems like cursor and ghost text got some bug issue caused because of forgot cursor++ added that then fixed that now cursor moves left or right and added a feature i can complete one text with right key so it aslo took time debugging and fixed a problem with tab autocomplete but for that didnt take time i knew instantly knew what wa sthe bug so fixed it just keep it in mind wherever postion change change the cursor tbh adding new feature is good but adding a feature and other breaking is the hard part but got the bug fixed relieved now for next
+
 *Add new things here as I learn them. This is a living document.*

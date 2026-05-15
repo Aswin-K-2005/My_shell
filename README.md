@@ -29,6 +29,8 @@ The end goal: a standalone AI-powered terminal (like Warp) with a local LLM that
 | Background jobs `&` | ✅ |
 | Job completion notification | ✅ |
 | Raw mode + arrow key history | ✅ |
+| Left/Right cursor movement | ✅ |
+| ghost text autocomplete | ✅ |
 | Tab autocomplete (Trie) | 🔨 in progress |
 | AI error explanation | 🔜 |
 | Natural language → command | 🔜 |
@@ -170,7 +172,9 @@ My_shell/
 
 ### Phase 2 — Shell polish (current)
 - [x] Raw mode + arrow key history
-- [ ] Tab autocomplete with Trie data structure
+- [x] Tab autocomplete with Trie data structure
+- [x] Left/right cursor traversal
+- [x] Ghost text with right arrow accept
 - [ ] `&&` and `||` operators
 - [ ] Startup mode selector (work/chill/nothing)
   - work → opens last project + neovim + spotify

@@ -619,11 +619,20 @@ char *lsh_read_line_raw(TrieNode *root){
                 }
                 else if(seq[1] == 'C'){
                     if(strlen(ghost) > 0){
-                    printf("\033[2m%*s\033[0m", (int)strlen(ghost), "");
-                    printf("\033[%dD", (int)strlen(ghost));
-                    ghost[0] = '\0';
+                    cursor++;
+                    buffer[position++] = ghost[0];
+                    memmove(ghost, ghost+1, strlen(ghost));
+                    buffer[position]='\0';
+                    printf("\r\033[K> %s", buffer);
+                    fflush(stdout);
+                    if(strlen(ghost) > 0){
+                         printf("\033[2m%s\033[0m", ghost);
+                         printf("\033[%dD", (int)strlen(ghost));
+                         fflush(stdout);
                     }
-                    if(cursor!=position){
+
+                    }
+                    else if(cursor!=position){
                         cursor++;
                         printf("\033[1C");
                     }

@@ -279,13 +279,11 @@ void lsh_split_pipe(char **args,int pipe_index,char **left,char **right){
 //refactored the redirections to a whole new fn
 int lsh_handle_redirections(char **args) {
     int i = 0;
-    int first_redir_index = -1;
-
+    
     while (args[i] != NULL) {
         if (strcmp(args[i], ">") == 0 || strcmp(args[i], ">>") == 0 || strcmp(args[i], "<") == 0) {
 
-            if (first_redir_index == -1) first_redir_index = i;
-
+           
             if (args[i+1] == NULL) {
                 fprintf(stderr, "lsh: No filename after %s\n", args[i]);
                 return -1;
@@ -308,16 +306,20 @@ int lsh_handle_redirections(char **args) {
                 dup2(fd, STDIN_FILENO);
                 close(fd);
             }
+            int j=i;
+            while(args[j+2] != NULL){
+            args[j] = args[j+2];
+            j++;
+           }
+           args[j] = NULL;
+
 
         }
+        else
         i++;
     }
 
-    if (first_redir_index != -1) {
-        args[first_redir_index] = NULL;
-    }
-
-    return 0;
+       return 0;
 }
 
 

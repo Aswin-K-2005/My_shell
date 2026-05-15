@@ -645,11 +645,22 @@ char *lsh_read_line_raw(TrieNode *root){
    @param line The line.
    @return Null-terminated array of tokens.
  */
+int is_operator(char c, char **operators){
+    int i = 0;
+    while(operators[i] != NULL){
+        if(c == operators[i][0]){
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}   
 char **lsh_split_line(char *line)
 {
     int bufsize = LSH_TOK_BUFSIZE, position = 0;
     char **tokens = malloc(bufsize * sizeof(char*));
     char *token =  malloc(LSH_RL_BUFSIZE);
+    char *operators[] = {">","<","|",NULL};
     int token_pos=0;
     int in_quotes =0;
     int i=0;
@@ -664,16 +675,58 @@ char **lsh_split_line(char *line)
             in_quotes=!in_quotes;
 
         }
-        else if(c==' ' && !in_quotes){
-            if(token_pos > 0){
-                token[token_pos]='\0';
-                tokens[position++] = strdup(token);
-                token_pos = 0;
+        else if(is_operator(c, operators) && !in_quotes){                  
+                if(token_pos > 0){
+                     if(position >= bufsize){
+                    bufsize+=LSH_TOK_BUFSIZE;
+                    tokens = realloc(tokens,bufsize*sizeof(char*));
+                    }
+     
+                
+                    token[token_pos]='\0';
+                    tokens[position++] = strdup(token);
+                    token_pos = 0;
+                         
+                }
+                 char t=line[i+1];
+             if(t==c){
                 if(position >= bufsize){
                     bufsize+=LSH_TOK_BUFSIZE;
                     tokens = realloc(tokens,bufsize*sizeof(char*));
+                    }
+ 
+                token[0]=c;
+                token[1]=t;
+                token[2]='\0';
+                tokens[position++] = strdup(token);
+                token_pos = 0;
+                               i++;
+                }            
+             else{
+               if(position >= bufsize){
+                    bufsize+=LSH_TOK_BUFSIZE;
+                    tokens = realloc(tokens,bufsize*sizeof(char*));
+                    }
+
+                token[0]=c;
+                token[1]='\0';
+                tokens[position++] = strdup(token);
+                token_pos = 0;
+                        
                 }
+            
             }
+        else if(c==' ' && !in_quotes){
+            if(token_pos > 0){
+                 if(position >= bufsize){
+                    bufsize+=LSH_TOK_BUFSIZE;
+                    tokens = realloc(tokens,bufsize*sizeof(char*));
+                }
+
+                token[token_pos]='\0';
+                tokens[position++] = strdup(token);
+                token_pos = 0;
+                           }
         }
         else{
             token[token_pos++] = c;
@@ -681,6 +734,12 @@ char **lsh_split_line(char *line)
         i++;
     }
     if(token_pos > 0){
+         if(position >= bufsize){
+                    bufsize+=LSH_TOK_BUFSIZE;
+                    tokens = realloc(tokens,bufsize*sizeof(char*));
+                    }
+     
+
         token[token_pos] = '\0';
         tokens[position++]=strdup(token);
     }

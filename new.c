@@ -1,6 +1,7 @@
 
 #include <signal.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -394,6 +395,7 @@ int lsh_launch(char **args)
         if(pid1 == 0){
             close(pipefd[0]);
             dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
             lsh_handle_redirections(left);
             execvp(left[0], left);
             perror("lsh");
@@ -511,6 +513,7 @@ char *lsh_read_line_raw(TrieNode *root){
     enable_raw_mode();  
     int bufsize = LSH_RL_BUFSIZE;
     int position = 0;
+    int cursor=0;
     char *buffer = malloc(sizeof(char) * bufsize);
     char *saved_buffer = malloc(sizeof(char) * bufsize);
     if(!buffer || !saved_buffer){
@@ -546,14 +549,27 @@ char *lsh_read_line_raw(TrieNode *root){
         }
         else if(c==127){
             ghost[0] = '\0';
-            if(position>0){
+            if(cursor>0 && position>0){
+                cursor--;
+                int j=cursor;
+                while(j<position){
+                        buffer[j]=buffer[j+1];
+                        j++;
+                    }
                 position--;
                 buffer[position]='\0';
                 printf("\r\033[K> %s",buffer);
                 fflush(stdout);
-                if(position>0){
-                    show_ghost(buffer, root, ghost);
-                }
+                int diff=position-cursor;
+                if(diff>0)printf("\033[%dD",diff);
+                fflush(stdout);
+                     if(position==cursor && position>0){
+                        if(strchr(buffer,' ')==NULL)
+                        show_ghost(buffer, root, ghost);
+                    }
+     
+                
+                               
             }
         }
         else if(c==27){
@@ -569,6 +585,7 @@ char *lsh_read_line_raw(TrieNode *root){
                         history_index--;
                         strncpy(buffer, history[history_index],bufsize);
                         position = strlen(buffer);
+                        cursor=position;
                         printf("\r\033[K> %s", buffer);
                         fflush(stdout);
                     }
@@ -584,13 +601,36 @@ char *lsh_read_line_raw(TrieNode *root){
                             strncpy(buffer, history[history_index], bufsize);
                         }
                         position =strlen(buffer);
+                        cursor=position;
                         printf("\r\033[K> %s",buffer);
                         fflush(stdout);
                     }
                 }
+                else if(seq[1] == 'D'){
+                    if(strlen(ghost) > 0){
+                       printf("\033[2m%*s\033[0m", (int)strlen(ghost), "");
+                        printf("\033[%dD", (int)strlen(ghost));
+                        ghost[0] = '\0';
+                    }
+                    if(cursor!=0){
+                        cursor--;
+                        printf("\033[1D");
+                    }
+                }
+                else if(seq[1] == 'C'){
+                    if(strlen(ghost) > 0){
+                    printf("\033[2m%*s\033[0m", (int)strlen(ghost), "");
+                    printf("\033[%dD", (int)strlen(ghost));
+                    ghost[0] = '\0';
+                    }
+                    if(cursor!=position){
+                        cursor++;
+                        printf("\033[1C");
+                    }
 
             }
         }
+    }
         else if(c == 9){
             if(strlen(ghost) > 0){
                 // clear ghost display
@@ -613,16 +653,40 @@ char *lsh_read_line_raw(TrieNode *root){
                 printf("\033[2m%*s\033[0m", (int)strlen(ghost), "");
                 printf("\033[%dD", (int)strlen(ghost));
                 ghost[0] = '\0';
+            } 
+            if(cursor<position){
+                int j=position;
+                while(j>cursor){
+                    buffer[j] = buffer[j-1];
+                    j--;
             }
-            buffer[position] = c;
-            position++;
-            buffer[position] = '\0';
-            printf("%c", c);
-            fflush(stdout);
+                buffer[cursor]=c;
+                cursor++;
+                position++;
+                buffer[position]='\0';
+                printf("\r\033[K> %s", buffer);
+                fflush(stdout);
+                int diff =position-cursor;
+                if(diff>0)printf("\033[%dD",diff);
+                fflush(stdout);
+            }
+            else{
+                cursor++;
+                buffer[position++] = c;
+                buffer[position] = '\0';
+                printf("%c", c);
+                fflush(stdout);
 
             // show new ghost
-            show_ghost(buffer, root, ghost);
-        }
+                if(position==cursor){
+                 if(strchr(buffer,' ')==NULL)
+                show_ghost(buffer, root, ghost);
+                }
+            }
+
+            }
+
+        
         if (position >= bufsize) {
             bufsize += LSH_RL_BUFSIZE;
             buffer = realloc(buffer, bufsize);
@@ -778,7 +842,13 @@ void lsh_loop(TrieNode *root)
         status = lsh_execute(args);
 
         free(line);
+        int i=0;
+        while(args[i]!=NULL){
+            free(args[i]);
+            i++;
+        }
         free(args);
+        
     } while (status);
 }
 

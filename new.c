@@ -649,6 +649,7 @@ char *lsh_read_line_raw(TrieNode *root){
                 // append ghost to buffer
                 strncpy(buffer + position, ghost, bufsize - position);
                 position += strlen(ghost);
+                cursor=position;
                 ghost[0] = '\0';
 
                 // reprint accepted text

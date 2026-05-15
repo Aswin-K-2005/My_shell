@@ -236,28 +236,17 @@ void load_commands(TrieNode *root){
                 if(strcmp(entry->d_name, ".") == 0 ||
                    strcmp(entry->d_name, "..") == 0) continue;
                 
-                // debug — check if ls is found
-                if(strcmp(entry->d_name, "ls") == 0){
-                }
                 
                 struct stat st;
                 char fullpath[1024];
                 snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, entry->d_name);
                 if(stat(fullpath, &st) == 0){
                     if(st.st_mode & S_IXUSR){
-                        if(strcmp(entry->d_name, "ls") == 0){
-                        }
                         trie_insert(root, entry->d_name);
-                    }
-                } else {
-                    if(strcmp(entry->d_name, "ls") == 0){
-                        perror("stat");
                     }
                 }
             }
             closedir(d);
-        } else {
-            printf("Could not open: %s\n", dir);
         }
         dir = strtok(NULL, ":");
     }

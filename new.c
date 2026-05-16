@@ -413,10 +413,31 @@ void lsh_split_andor(char **args,int index,char **left,char **right){
     right[pos]=NULL;
 }
 
+void ask_ai(char *error){
+    int fin = open("/tmp/aish_in", O_WRONLY);
+    if(fin < 0){ perror("aish_in"); return; }
+    write(fin, error, strlen(error));
+    close(fin);
+    
+    // read response from aish_out
+    int fout = open("/tmp/aish_out", O_RDONLY);
+    if(fout < 0){ perror("aish_out"); return; }
+    char response[8192];
+    int n = read(fout, response, sizeof(response)-1);
+    if(n > 0){
+        response[n] = '\0';
+        printf("\033[33m[aish AI]: %s\033[0m\n", response);
+    }
+    close(fout);
+}
+
 int lsh_run_get_status(char **args);
 
 int lsh_launch(char **args)
-{   OpResult result=lsh_find_andor(args);
+{   int stderr_pipe[2];
+    pipe(stderr_pipe);
+    OpResult result=lsh_find_andor(args);
+
     if(result.index!=-1){
             char **left=malloc(sizeof(char*)*LSH_RL_BUFSIZE);
             char **right=malloc(sizeof(char*)*LSH_RL_BUFSIZE);
@@ -431,6 +452,8 @@ int lsh_launch(char **args)
         }
         free(right);
         free(left);
+        close(stderr_pipe[0]);
+        close(stderr_pipe[1]);
         return 1;
     }
     int pipe_index = lsh_find_pipe(args);
@@ -476,6 +499,8 @@ int lsh_launch(char **args)
         waitpid(pid2, NULL, 0);
         free(left);
         free(right);
+        close(stderr_pipe[0]);
+        close(stderr_pipe[1]);
         return 1;
     }
     int is_background=lsh_is_background(args);
@@ -484,6 +509,9 @@ int lsh_launch(char **args)
 
     pid = fork();
     if (pid == 0) {
+        close(stderr_pipe[0]);
+        dup2(stderr_pipe[1],STDERR_FILENO);
+        close(stderr_pipe[1]);
         lsh_handle_redirections(args);        
         if (execvp(args[0], args) == -1) {
 
@@ -495,12 +523,26 @@ int lsh_launch(char **args)
         perror("lsh");
     } else {
         // Parent process
-        if(is_background){printf("[background] pid: %d\n",pid);}
+        close(stderr_pipe[1]);
+        if(is_background){
+            close(stderr_pipe[0]);
+            printf("[background] pid: %d\n",pid);}
+
         else{
             do {
                 wpid = waitpid(pid, &status, WUNTRACED);
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-            return WEXITSTATUS(status);    
+            if(WEXITSTATUS(status)!=0){
+                 char error_buf[4096];
+              int n = read(stderr_pipe[0], error_buf, sizeof(error_buf)-1);
+            if(n > 0){
+            error_buf[n] = '\0';
+            // send to AI — we'll add this next
+            ask_ai(error_buf);            }
+            } 
+            close(stderr_pipe[0]);
+            return WEXITSTATUS(status); 
+
         }
     }
     return 1;
@@ -946,6 +988,8 @@ int main(int argc, char **argv)
     
     signal(SIGCHLD,sigchld_handler);    
     // Run command loop.
+    mkfifo("/tmp/aish_in", 0666);
+    mkfifo("/tmp/aish_out", 0666);
     lsh_loop(root);
 
     // Perform any shutdown/cleanup.

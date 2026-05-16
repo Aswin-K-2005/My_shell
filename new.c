@@ -376,8 +376,63 @@ int lsh_exit(char **args)
     return 0;
 }
 
+typedef struct{
+    int index;
+    char *op;
+}OpResult;
+
+OpResult lsh_find_andor(char **args){
+            OpResult result;
+            int flag=0;
+            for(int i=0;args[i]!=NULL;i++){
+                if (strcmp(args[i], "&&")==0){
+                               result.index=i;
+                               result.op="&&";
+                               return result;
+        }
+                else if(strcmp(args[i],"||")==0){
+                    result.index=i;
+                    result.op="||";
+                    return result;
+        }
+    }
+    result.index=-1;
+    return result;
+}
+
+void lsh_split_andor(char **args,int index,char **left,char **right){
+        int i;
+        int pos=0;
+        for(i=0;i<index;i++){
+            left[i]=args[i];
+    }
+    left[i]=NULL;
+    for(i=index+1;args[i]!=NULL;i++){
+            right[pos++]=args[i];
+    }
+    right[pos]=NULL;
+}
+
+int lsh_run_get_status(char **args);
+
 int lsh_launch(char **args)
-{
+{   OpResult result=lsh_find_andor(args);
+    if(result.index!=-1){
+            char **left=malloc(sizeof(char*)*LSH_RL_BUFSIZE);
+            char **right=malloc(sizeof(char*)*LSH_RL_BUFSIZE);
+            lsh_split_andor(args, result.index, left,right);
+            int status=lsh_run_get_status(left);
+            if(strcmp(result.op,"&&")==0){
+            if(status==0) lsh_launch(right);
+
+        }
+            else{
+            if(status!=0) lsh_launch(right);
+        }
+        free(right);
+        free(left);
+        return 1;
+    }
     int pipe_index = lsh_find_pipe(args);
     if(pipe_index != -1){
         char **left = malloc(sizeof(char*) * LSH_RL_BUFSIZE);
@@ -445,12 +500,21 @@ int lsh_launch(char **args)
             do {
                 wpid = waitpid(pid, &status, WUNTRACED);
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+            return WEXITSTATUS(status);    
         }
     }
-
     return 1;
 }
-
+int lsh_run_get_status(char **args){
+        pid_t pid=fork();
+        if(pid==0){
+        exit(lsh_launch(args));
+    }
+    int status;
+    waitpid(pid,&status,0);
+    if(WIFEXITED(status)) return WEXITSTATUS(status);
+    return 1;
+}
 
 int lsh_execute(char **args)
 {
@@ -736,7 +800,7 @@ char **lsh_split_line(char *line)
     int bufsize = LSH_TOK_BUFSIZE, position = 0;
     char **tokens = malloc(bufsize * sizeof(char*));
     char *token =  malloc(LSH_RL_BUFSIZE);
-    char *operators[] = {">","<","|",NULL};
+    char *operators[] = {">","<","|","&",NULL};
     int token_pos=0;
     int in_quotes =0;
     int i=0;

@@ -12,6 +12,21 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+pid_t background_pids[100];
+int background_count = 0;
+
+void add_background_pid(pid_t pid){
+    background_pids[background_count++]=pid;
+  }
+int is_background_pid(pid_t pid){
+    for(int i=0;i<background_count;i++){
+        if(pid==background_pids[i]){
+            return 1;
+        }
+    }
+    return 0;
+}
+
 
 volatile sig_atomic_t flag=0;
 volatile pid_t done_pid=0;
@@ -20,8 +35,10 @@ void sigchld_handler(int sig){
     int saved_errno = errno;
     pid_t done;
     while((done=waitpid(-1,NULL,WNOHANG))>0){
+        if(is_background_pid(done)){
         done_pid=done;
         flag=1;   
+        }
     }
     errno = saved_errno;
 }
@@ -39,6 +56,8 @@ typedef struct {
 
 CommandFreq freq_table[1000];
 int freq_count =0;
+
+int last_exit_status=0;
 
 int compare_freq(const void *a, const void *b){
     char *cmd_a = *(char**)a;
@@ -232,6 +251,7 @@ void load_commands(TrieNode *root){
     while(dir != NULL){
         DIR *d = opendir(dir);
         if(d){
+
             struct dirent *entry;
             while((entry = readdir(d)) != NULL){
                 if(strcmp(entry->d_name, ".") == 0 ||
@@ -414,7 +434,7 @@ void lsh_split_andor(char **args,int index,char **left,char **right){
 }
 
 void ask_ai(char *error){
-    int fin = open("/tmp/aish_in", O_WRONLY);
+    int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
     if(fin < 0){ perror("aish_in"); return; }
     write(fin, error, strlen(error));
     close(fin);
@@ -525,14 +545,15 @@ int lsh_launch(char **args)
         // Parent process
         close(stderr_pipe[1]);
         if(is_background){
+            add_background_pid(pid);
             close(stderr_pipe[0]);
-            printf("[background] pid: %d\n",pid);}
-
+        }
         else{
             do {
                 wpid = waitpid(pid, &status, WUNTRACED);
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
-            if(WEXITSTATUS(status)!=0){
+            last_exit_status = WEXITSTATUS(status);
+            if(last_exit_status!=0){
                  char error_buf[4096];
               int n = read(stderr_pipe[0], error_buf, sizeof(error_buf)-1);
             if(n > 0){
@@ -541,23 +562,16 @@ int lsh_launch(char **args)
             ask_ai(error_buf);            }
             } 
             close(stderr_pipe[0]);
-            return WEXITSTATUS(status); 
+            return 1;
 
         }
     }
     return 1;
 }
 int lsh_run_get_status(char **args){
-        pid_t pid=fork();
-        if(pid==0){
-        exit(lsh_launch(args));
-    }
-    int status;
-    waitpid(pid,&status,0);
-    if(WIFEXITED(status)) return WEXITSTATUS(status);
-    return 1;
+    lsh_launch(args);
+    return last_exit_status;
 }
-
 int lsh_execute(char **args)
 {
     int i;
@@ -942,7 +956,7 @@ void lsh_loop(TrieNode *root)
 
         line = lsh_read_line_raw(root);
         if (flag){
-            printf("\n[done] pid: %d\n",(int)done_pid);
+            printf("\n[done] background job is finished\n");
             flag=0;
             done_pid=0;
         }

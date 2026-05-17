@@ -648,9 +648,20 @@ char *lsh_read_line_raw(TrieNode *root){
     ghost[0]='\0';
 
 
-    printf("> ");
+    printf("aish → ");
     fflush(stdout);
     while (1) {
+        if(flag){
+        
+        printf("\r\033[K");
+        printf("[done] background job finished\n");
+        printf("aish → %s", buffer);
+        int diff = position - cursor;
+        if(diff > 0) printf("\033[%dD", diff);
+        fflush(stdout);
+        flag = 0;
+        done_pid = 0;
+        }
         // Read a character
         c = getchar();
 
@@ -678,7 +689,7 @@ char *lsh_read_line_raw(TrieNode *root){
                     }
                 position--;
                 buffer[position]='\0';
-                printf("\r\033[K> %s",buffer);
+                printf("\r\033[Kaish → %s",buffer);
                 fflush(stdout);
                 int diff=position-cursor;
                 if(diff>0)printf("\033[%dD",diff);
@@ -706,7 +717,7 @@ char *lsh_read_line_raw(TrieNode *root){
                         strncpy(buffer, history[history_index],bufsize);
                         position = strlen(buffer);
                         cursor=position;
-                        printf("\r\033[K> %s", buffer);
+                        printf("\r\033[Kaish → %s", buffer);
                         fflush(stdout);
                     }
                 }
@@ -722,7 +733,7 @@ char *lsh_read_line_raw(TrieNode *root){
                         }
                         position =strlen(buffer);
                         cursor=position;
-                        printf("\r\033[K> %s",buffer);
+                        printf("\r\033[Kaish → %s",buffer);
                         fflush(stdout);
                     }
                 }
@@ -743,7 +754,7 @@ char *lsh_read_line_raw(TrieNode *root){
                     buffer[position++] = ghost[0];
                     memmove(ghost, ghost+1, strlen(ghost));
                     buffer[position]='\0';
-                    printf("\r\033[K> %s", buffer);
+                    printf("\r\033[Kaish → %s", buffer);
                     fflush(stdout);
                     if(strlen(ghost) > 0){
                          printf("\033[2m%s\033[0m", ghost);
@@ -774,7 +785,7 @@ char *lsh_read_line_raw(TrieNode *root){
 
                 // reprint accepted text
                 // simpler — just reprint whole line
-                printf("\r\033[K> %s", buffer);
+                printf("\r\033[Kaish → %s", buffer);
                 fflush(stdout);
             }
         }
@@ -794,7 +805,7 @@ char *lsh_read_line_raw(TrieNode *root){
                 cursor++;
                 position++;
                 buffer[position]='\0';
-                printf("\r\033[K> %s", buffer);
+                printf("\r\033[Kaish → %s", buffer);
                 fflush(stdout);
                 int diff =position-cursor;
                 if(diff>0)printf("\033[%dD",diff);
@@ -955,12 +966,7 @@ void lsh_loop(TrieNode *root)
     do {
 
         line = lsh_read_line_raw(root);
-        if (flag){
-            printf("\n[done] background job is finished\n");
-            flag=0;
-            done_pid=0;
-        }
-        if(strlen(line)>0){
+         if(strlen(line)>0){
             int slot = history_count % history_size;
             if(history[slot]!=NULL){
                 free(history[slot]);

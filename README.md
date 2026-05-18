@@ -31,8 +31,8 @@ The end goal: a standalone AI-powered terminal (like Warp) with a local LLM that
 | Raw mode + arrow key history | ✅ |
 | Left/Right cursor movement | ✅ |
 | ghost text autocomplete | ✅ |
-| Tab autocomplete (Trie) | 🔨 in progress |
-| AI error explanation | 🔜 |
+| Tab autocomplete (Trie) | ✅ |
+| AI error explanation | ✅ |
 | Natural language → command | 🔜 |
 | Qt GUI (Warp-style) | 🔜 |
 
@@ -162,9 +162,12 @@ ESC [ B → down arrow
 
 ```
 My_shell/
-├── shell.c       # entire shell — ~500 lines of C
+├── new.c
+├── aish_ai.py
+├── install.sh
 └── README.md
 ```
+
 
 ---
 
@@ -175,15 +178,15 @@ My_shell/
 - [x] Tab autocomplete with Trie data structure
 - [x] Left/right cursor traversal
 - [x] Ghost text with right arrow accept
-- [ ] `&&` and `||` operators
+- [X] `&&` and `||` operators
 - [ ] Startup mode selector (work/chill/nothing)
   - work → opens last project + neovim + spotify
   - chill → opens YouTube in Brave
 
 ### Phase 3 — Local AI (next)
-- [ ] ollama + CodeLlama 7B running locally
-- [ ] Capture stderr from failed commands
-- [ ] AI explains errors in plain English
+- [X] ollama + CodeLlama 7B running locally
+- [X] Capture stderr from failed commands
+- [X] AI explains errors in plain English
 - [ ] Natural language → shell command translation
 - [ ] Context-aware command suggestions
 

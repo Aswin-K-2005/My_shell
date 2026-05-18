@@ -1010,8 +1010,17 @@ int main(int argc, char **argv)
     // Run command loop.
     mkfifo("/tmp/aish_in", 0666);
     mkfifo("/tmp/aish_out", 0666);
+    pid_t aish_pid=fork();
+    if(aish_pid == 0){
+        char ai_path[256];
+        snprintf(ai_path,sizeof(ai_path),"%s/.config/aish/aish_ai.py",getenv("HOME"));
+        char *python_args[]={"python3",ai_path,NULL};
+        execvp("python3", python_args);
+        exit(0);
+        
+    }
     lsh_loop(root);
-
+    kill(aish_pid, SIGTERM);
     // Perform any shutdown/cleanup.
 
     return EXIT_SUCCESS;

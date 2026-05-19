@@ -10,7 +10,7 @@ while True:
     if error in cache:
         result = cache[error]
     else:
-        prompt = f"Explain this shell error in one sentence and suggest a fix. Use the actual filename from the error: {error}"
+        prompt = f"In one sentence explain why this shell command failed and how to fix it: {error}"
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={

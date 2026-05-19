@@ -9,7 +9,7 @@ while True:
     
     if message.startswith("nlp:"):
         query = message[4:]
-        prompt = f"Convert this to a single shell command, return ONLY the command with no explanation, no markdown, no backticks: {query}"
+        prompt = f"Convert this to a single shell command,no chaining with ; return ONLY the command with no explanation, no markdown, no backticks: {query}"
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={

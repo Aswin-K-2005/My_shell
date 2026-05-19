@@ -147,7 +147,7 @@ typedef struct TrieNode{
 }TrieNode;
 
 
-
+int nlp_mode=0;
 
 /*
   Function Declarations for builtin shell commands:
@@ -156,6 +156,7 @@ int lsh_cd(char **args);
 int lsh_help(char **args);
 int lsh_exit(char **args);
 int lsh_history(char **args);
+int lsh_mode(char **args);
 /*
   List of builtin commands, followed by their corresponding functions.
  */
@@ -163,15 +164,39 @@ char *builtin_str[] = {
     "cd",
     "help",
     "history",
-    "exit"
+    "exit",
+    "mode"
 };
 
 int (*builtin_func[]) (char **) = {
     &lsh_cd,
     &lsh_help,
     &lsh_history,
-    &lsh_exit
+    &lsh_exit,
+    &lsh_mode
 };
+
+
+int lsh_mode(char **args){
+    if(args[1]==NULL){
+        printf("current mode: %s\n",nlp_mode ? "nlp" : "shell");
+        return 1;
+    }
+    if(strcmp(args[1],"nlp")==0 || strcmp(args[1],"NLP")==0){
+        nlp_mode =1;
+        printf("switched to NLP mode\n");
+    }
+    else if(strcmp(args[1], "shell")==0 || strcmp(args[1],"Shell")==0){
+        nlp_mode=0;
+        printf("switched to shell mode\n");
+    }
+    else{
+        printf("unknown mode: %s\n",args[1]);
+        printf("Available modes : nlp shell\n");
+    }
+   return 1; 
+ }
+
 
 int compare_length(const void *a, const void *b){
     return strlen(*(char**)a) - strlen(*(char**)b);
@@ -376,6 +401,33 @@ int lsh_cd(char **args)
    @param args List of args.  Not examined.
    @return Always returns 1, to continue executing.
  */
+
+
+char *ask_nlp(char **args){
+    char message[4096];
+    strcpy(message, "nlp:");
+    int i = 0;
+    while(args[i] != NULL){
+        strcat(message, args[i]);
+        if(args[i+1] != NULL) strcat(message, " ");
+        i++;
+    }    
+    // write to aish_in
+    int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
+    if(fin < 0) return NULL;
+    write(fin, message, strlen(message));
+    close(fin);
+    
+    // read response from aish_out
+    int fout = open("/tmp/aish_out", O_RDONLY);
+    if(fout < 0) return NULL;
+    char *response = malloc(4096);
+    int n = read(fout, response, 4095);
+    if(n > 0) response[n] = '\0';
+    close(fout);
+    return response;
+}
+
 int lsh_help(char **args)
 {
     int i;
@@ -434,11 +486,12 @@ void lsh_split_andor(char **args,int index,char **left,char **right){
 }
 
 void ask_ai(char *error){
+    char message[4096];
+    snprintf(message, sizeof(message), "error:%s", error);
     int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
-    if(fin < 0){ perror("aish_in"); return; }
-    write(fin, error, strlen(error));
-    close(fin);
-    
+    if(fin < 0){ return; }
+    write(fin, message, strlen(message));
+    close(fin);    
     // read response from aish_out
     int fout = open("/tmp/aish_out", O_RDONLY);
     if(fout < 0){ perror("aish_out"); return; }
@@ -572,6 +625,7 @@ int lsh_run_get_status(char **args){
     lsh_launch(args);
     return last_exit_status;
 }
+char **lsh_split_line(char *line);
 int lsh_execute(char **args)
 {
     int i;
@@ -587,6 +641,24 @@ int lsh_execute(char **args)
         if (strcmp(args[0], builtin_str[i]) == 0) {
             return (*builtin_func[i])(args);
         }
+    }
+    if(nlp_mode==1){
+        char *cmd = ask_nlp(args);
+        if(cmd!=NULL){
+            printf("Running: \033[32m%s\033[0m\n", cmd);
+            printf("Execute? (y/n): ");
+            fflush(stdout);
+            char confirm[4];
+            fgets(confirm, sizeof(confirm), stdin);
+            if(confirm[0] == 'y'){
+                // tokenize cmd and execute
+                char **nlp_args = lsh_split_line(cmd);
+                lsh_launch(nlp_args);
+                free(nlp_args);
+            }
+            free(cmd);
+        }
+        return 1;
     }
        return lsh_launch(args);
 }

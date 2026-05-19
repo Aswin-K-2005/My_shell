@@ -653,7 +653,9 @@ int lsh_execute(char **args)
             if(confirm[0] == 'y'){
                 // tokenize cmd and execute
                 char **nlp_args = lsh_split_line(cmd);
+                nlp_mode=0;
                 lsh_execute(nlp_args);
+                nlp_mode=1;
                 free(nlp_args);
             }
             free(cmd);

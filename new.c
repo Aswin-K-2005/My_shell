@@ -698,12 +698,51 @@ void show_ghost(char *prefix, TrieNode *root, char *ghost){
 
 }
 
+void print_prompt(double elapsed){
+        char cwd[1024];
+        getcwd(cwd,sizeof(cwd));
+        char *home=getenv("HOME");
+        if(strncmp(cwd, home, strlen(home))==0){
+            printf("~%s",cwd+strlen(home));
+    }   else{
+
+        printf("%s",cwd);
+    }
+    // git branch
+    FILE *git = fopen(".git/HEAD", "r");
+    if(git){
+         char branch[256];
+         fgets(branch, sizeof(branch), git);
+         fclose(git);
+    // HEAD contains "ref: refs/heads/main\n"
+    // extract just "main"
+        char *prefix = "ref: refs/heads/";
+        if(strncmp(branch, prefix, strlen(prefix)) == 0){
+            char *branchname = branch + strlen(prefix);
+        // remove newline
+             branchname[strcspn(branchname, "\n")] = '\0';
+             printf("  \033[32m%s\033[0m", branchname);
+    }
+}
+    // current time
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char timestr[16];
+    strftime(timestr, sizeof(timestr), "%I:%M:%S %p", t);
+    printf("  \033[34m%s\033[0m", timestr);
+    if(elapsed > 0.1){
+        printf("  \033[33m%.1fs\033[0m", elapsed);
+    }
+    printf("\n");
+    printf("aish → ");
+    fflush(stdout);
+}
 
 
 
 
 
-char *lsh_read_line_raw(TrieNode *root){
+char *lsh_read_line_raw(TrieNode *root,double elapsed){
     enable_raw_mode();  
     int bufsize = LSH_RL_BUFSIZE;
     int position = 0;
@@ -721,10 +760,8 @@ char *lsh_read_line_raw(TrieNode *root){
     char ghost[1024];
     ghost[0]='\0';
 
-
-    printf("aish → ");
-    fflush(stdout);
-    while (1) {
+      print_prompt(elapsed);  
+      while (1) {
         if(flag){
         
         printf("\r\033[K");
@@ -1036,10 +1073,10 @@ void lsh_loop(TrieNode *root)
     char *line;
     char **args;
     int status;
-
+    
+    double elapsed = 0.0;
     do {
-
-        line = lsh_read_line_raw(root);
+        line = lsh_read_line_raw(root,elapsed);
          if(strlen(line)>0){
             int slot = history_count % history_size;
             if(history[slot]!=NULL){
@@ -1049,8 +1086,12 @@ void lsh_loop(TrieNode *root)
             history_count++;
         }
         args = lsh_split_line(line);
+        struct timespec start, end;
+        clock_gettime(CLOCK_MONOTONIC, &start);
         status = lsh_execute(args);
-
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        elapsed = (end.tv_sec - start.tv_sec) + 
+                 (end.tv_nsec - start.tv_nsec) / 1e9;
         free(line);
         int i=0;
         while(args[i]!=NULL){

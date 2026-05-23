@@ -626,6 +626,26 @@ int lsh_run_get_status(char **args){
     return last_exit_status;
 }
 char **lsh_split_line(char *line);
+void expand_args(char **args){
+    char *home=getenv("HOME");
+    for(int i=0;args[i] !=NULL;i++){
+        if(args[i][0]=='~'){
+        char expanded[1024];
+        snprintf(expanded, sizeof(expanded),"%s%s",home,args[i]+1);
+        free(args[i]);
+        args[i]=strdup(expanded);
+        }
+        else if(args[i][0] == '$'){
+    char *value = getenv(args[i]+1);
+    if(value != NULL){
+        free(args[i]);
+        args[i] = strdup(value);
+    }
+}
+}
+
+}
+
 int lsh_execute(char **args)
 {
     int i;
@@ -634,6 +654,7 @@ int lsh_execute(char **args)
         // An empty command was entered.
         return 1;
     }
+     expand_args(args);
      update_freq(args[0]);
 
 

@@ -1,7 +1,16 @@
 import requests
 import json
+import os
 
 cache = {}
+
+def read_memory():
+    path = os.path.expanduser("~/.config/aish/memory.json")
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
 while True:
     try:
@@ -10,7 +19,9 @@ while True:
     
         if message.startswith("nlp:"):
             query = message[4:]
-            prompt = f"Convert this to a shell command. Examples: 'show python files' -> 'find . -name \"*.py\"', 'count lines in file' -> 'wc -l filename'. Return ONLY the command: {query}"  
+            memory = read_memory()
+            context = f"User's current directory: {memory.get('last_dir', 'unknown')}. Last command: {memory.get('last_command', 'unknown')}."
+            prompt = f"{context} Convert this to a shell command. Examples: 'show python files' -> 'find . -name \"*.py\"', 'count lines in file' -> 'wc -l filename'. Return ONLY the command: {query}"  
             response = requests.post(
             "http://localhost:11434/api/generate",
                 json={

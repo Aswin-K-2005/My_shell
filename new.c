@@ -652,6 +652,31 @@ void expand_args(char **args){
 
 }
 
+void save_memory(char **args){
+    char path[256];
+    snprintf(path, sizeof(path),"%s/.config/aish/memory.json",getenv("HOME"));
+
+    char cwd[1024];
+    getcwd(cwd, sizeof(cwd));
+
+     char command[4096];
+    command[0] = '\0';
+    for(int i = 0; args[i] != NULL; i++){
+        strcat(command, args[i]);
+        if(args[i+1] != NULL) strcat(command, " ");
+    }
+
+    FILE *f=fopen(path,"w");
+    if(!f) return;
+
+    fprintf(f,"{\n");
+    fprintf(f, "  \"last_dir\": \"%s\",\n", cwd);
+    fprintf(f, "  \"last_command\": \"%s\"\n", command);
+    fprintf(f, "}\n");
+    
+    fclose(f);
+}
+
 int lsh_execute(char **args)
 {
     int i;
@@ -663,10 +688,12 @@ int lsh_execute(char **args)
      expand_args(args);
      update_freq(args[0]);
 
-
+    int result;
     for (i = 0; i < lsh_num_builtins(); i++) {
         if (strcmp(args[0], builtin_str[i]) == 0) {
-            return (*builtin_func[i])(args);
+            result=(*builtin_func[i])(args);
+            save_memory(args);
+            return result;
         }
     }
     if(nlp_mode==1){
@@ -687,9 +714,12 @@ int lsh_execute(char **args)
             }
             free(cmd);
         }
+        save_memory(args);
         return 1;
     }
-       return lsh_launch(args);
+        result=lsh_launch(args);
+        save_memory(args);
+       return result;
 }
 
 

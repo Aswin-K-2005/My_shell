@@ -136,7 +136,7 @@ void enable_raw_mode(){
     atexit(disable_raw_mode);
 
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
@@ -544,6 +544,7 @@ int lsh_launch(char **args)
         pid_t pid1 = fork();
         if(pid1 < 0){ perror("lsh"); return 1; }
         if(pid1 == 0){
+            signal(SIGINT,SIG_DFL);
             close(pipefd[0]);
             dup2(pipefd[1], STDOUT_FILENO);
             close(pipefd[1]);
@@ -556,6 +557,7 @@ int lsh_launch(char **args)
         pid_t pid2 = fork();
         if(pid2 < 0){ perror("lsh"); return 1; }
         if(pid2 == 0){
+            signal(SIGINT,SIG_DFL);
             close(pipefd[1]);
             dup2(pipefd[0], STDIN_FILENO);
             close(pipefd[0]);
@@ -582,6 +584,7 @@ int lsh_launch(char **args)
 
     pid = fork();
     if (pid == 0) {
+        signal(SIGINT,SIG_DFL);
         close(stderr_pipe[0]);
         dup2(stderr_pipe[1],STDERR_FILENO);
         close(stderr_pipe[1]);
@@ -796,7 +799,7 @@ char *lsh_read_line_raw(TrieNode *root,double elapsed){
         }
         // Read a character
         c = getchar();
-
+        
         // If we hit EOF, replace it with a null character and return.
         if (c == EOF || c == '\n') {
             if(strlen(ghost) > 0){
@@ -809,6 +812,17 @@ char *lsh_read_line_raw(TrieNode *root,double elapsed){
             free(saved_buffer);
             return buffer;
 
+        }
+        else if(c==3){
+       printf("^C\n");
+    // reset buffer
+        position = 0;
+        cursor = 0;
+        buffer[0] = '\0';
+        ghost[0] = '\0';
+    // reprint prompt
+        print_prompt(elapsed);
+        fflush(stdout);
         }
         else if(c==127){
             ghost[0] = '\0';
@@ -1142,7 +1156,8 @@ int main(int argc, char **argv)
         trie_insert(root, builtin_str[i]);
     }
     
-    signal(SIGCHLD,sigchld_handler);    
+    signal(SIGCHLD,sigchld_handler);
+    signal(SIGINT,SIG_IGN);
     // Run command loop.
     mkfifo("/tmp/aish_in", 0666);
     mkfifo("/tmp/aish_out", 0666);

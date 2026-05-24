@@ -666,16 +666,38 @@ void save_memory(char **args){
         if(args[i+1] != NULL) strcat(command, " ");
     }
 
-    FILE *f=fopen(path,"w");
-    if(!f) return;
+        FILE *f = fopen(path, "w");
+        if(!f) return;
 
-    fprintf(f,"{\n");
+    char *project_type = "unknown";
+    if(access("package.json", F_OK) == 0) project_type = "nodejs";
+    else if(access("requirements.txt", F_OK) == 0) project_type = "python";
+    else if(access("Cargo.toml", F_OK) == 0) project_type = "rust";
+    else if(access("pom.xml", F_OK) == 0) project_type = "java";
+    else if(access("Makefile", F_OK) == 0) project_type = "c/cpp";
+    // check for .c files
+    if(strcmp(project_type, "unknown") == 0){
+    DIR *d = opendir(".");
+    if(d){
+        struct dirent *entry;
+        while((entry = readdir(d)) != NULL){
+            char *ext = strrchr(entry->d_name, '.');
+            if(ext && strcmp(ext, ".c") == 0){
+                project_type = "c";
+                break;
+            }
+        }
+     closedir(d);
+    }
+    }
+
+    fprintf(f, "{\n");
     fprintf(f, "  \"last_dir\": \"%s\",\n", cwd);
-    fprintf(f, "  \"last_command\": \"%s\"\n", command);
+    fprintf(f, "  \"last_command\": \"%s\",\n", command);
+    fprintf(f, "  \"project_type\": \"%s\"\n", project_type);
     fprintf(f, "}\n");
-    
     fclose(f);
-}
+    }
 
 int lsh_execute(char **args)
 {

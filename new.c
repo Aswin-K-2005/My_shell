@@ -609,6 +609,9 @@ int lsh_launch(char **args)
                 wpid = waitpid(pid, &status, WUNTRACED);
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
             last_exit_status = WEXITSTATUS(status);
+            if(WIFSIGNALED(status)){
+                printf("\n"); 
+            }
             if(last_exit_status!=0){
                  char error_buf[4096];
               int n = read(stderr_pipe[0], error_buf, sizeof(error_buf)-1);

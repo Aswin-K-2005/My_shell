@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>aish dashboard</title>
+  </head>
+  <body>
+
+    <input type="text" id="messageInput" placeholder="Ask something..." />
+    <button onclick="sendMessage()">Send</button>
+    <div id="output"></div>
+    <script>
+        async function sendMessage(){
+        let message = document.getElementById("messageInput").value
+        let div = document.createElement("div")
+        div.innerHTML = "You: " + message
+        document.getElementById("output").appendChild(div)
+
+        let response= await fetch('http://localhost:8000/chat',{
+            method: 'POST',
+            headers:{
+                'Content-Type':'application/json;charset=utf-8'
+            },
+            body: JSON.stringify({message:message})
+        });
+        document.getElementById("messageInput").value = ""
+        let result = await response.json();
+        let div2 = document.createElement("div")
+        div2.innerHTML = "Ai: " + result.response
+        document.getElementById("output").appendChild(div2)
+        }
+    </script>
+  </body>
+</html>

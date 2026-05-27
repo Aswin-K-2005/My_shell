@@ -2,19 +2,28 @@
 <html>
   <head>
     <title>aish dashboard</title>
+     <script src="https://cdn.tailwindcss.com"></script>
+     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
-  <body>
-
-    <input type="text" id="messageInput" placeholder="Ask something..." />
-    <button onclick="sendMessage()">Send</button>
-    <div id="output"></div>
+  <body class="bg-gray-900 text-white h-screen">
+       <div class="fixed bottom-0 w-full p-4 bg-gray-900 flex gap-2">
+    <input class="bg-gray-800 text-white rounded-lg p-2 w-full" type="text" id="messageInput" placeholder="Ask something..." />
+    <button class="bg-blue-600 text-white px-4 py-2 rounded-lg" onclick="sendMessage()">Send</button>
+    </div>
+    <div id="output" class="flex flex-col overflow-y-auto p-4 h-screen pb-20"></div>
     <script>
         async function sendMessage(){
         let message = document.getElementById("messageInput").value
         let div = document.createElement("div")
+        document.getElementById("messageInput").value = ""
+        div.className = "bg-gray-700 rounded-lg p-3 mb-2 self-end max-w-lg"
         div.innerHTML = "You: " + message
         document.getElementById("output").appendChild(div)
-
+        let thinking = document.createElement("div")
+        thinking.className = "bg-gray-700 rounded-lg p-3 mb-2 self-start max-w-lg"
+        thinking.innerHTML = "AI: thinking..."
+        thinking.id = "thinking"
+        document.getElementById("output").appendChild(thinking)
         let response= await fetch('http://localhost:8000/chat',{
             method: 'POST',
             headers:{
@@ -22,10 +31,11 @@
             },
             body: JSON.stringify({message:message})
         });
-        document.getElementById("messageInput").value = ""
         let result = await response.json();
+        document.getElementById('thinking').remove()
         let div2 = document.createElement("div")
-        div2.innerHTML = "Ai: " + result.response
+        div2.className = "bg-gray-700 rounded-lg p-3 mb-2 self-start max-w-lg"
+        div2.innerHTML = "Ai: " + marked.parse(result.response)
         document.getElementById("output").appendChild(div2)
         }
     </script>

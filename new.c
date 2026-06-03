@@ -1,4 +1,5 @@
 
+#include <libgen.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -11,7 +12,7 @@
 #include <termios.h>
 #include <dirent.h>
 #include <sys/stat.h>
-
+#include "compress.h"
 pid_t background_pids[100];
 int background_count = 0;
 
@@ -402,17 +403,10 @@ int lsh_cd(char **args)
    @return Always returns 1, to continue executing.
  */
 
-
-char *ask_nlp(char **args){
+char *ask_nlp(char *input){
     char message[4096];
-    strcpy(message, "nlp:");
-    int i = 0;
-    while(args[i] != NULL){
-        strcat(message, args[i]);
-        if(args[i+1] != NULL) strcat(message, " ");
-        i++;
-    }    
-    // write to aish_in
+    snprintf(message, sizeof(message), "nlp:%s",input);
+       // write to aish_in
     int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
     if(fin < 0) return NULL;
     write(fin, message, strlen(message));
@@ -485,9 +479,13 @@ void lsh_split_andor(char **args,int index,char **left,char **right){
     right[pos]=NULL;
 }
 
+
 void ask_ai(char *error){
-    char message[4096];
-    snprintf(message, sizeof(message), "error:%s", error);
+    char compressed[4096];
+    compress_error(error,compressed);
+
+    char message[8192];
+    snprintf(message, sizeof(message), "error:%s", compressed);
     int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
     if(fin < 0){ return; }
     write(fin, message, strlen(message));
@@ -719,7 +717,9 @@ int lsh_execute(char **args)
         }
     }
     if(nlp_mode==1){
-        char *cmd = ask_nlp(args);
+        char compressed[4096];
+        compress_nlp(args,compressed);
+        char *cmd = ask_nlp(compressed);
         if(cmd!=NULL){
             printf("Running: \033[32m%s\033[0m\n", cmd);
             printf("Execute? (y/n): ");
@@ -1203,6 +1203,7 @@ int main(int argc, char **argv)
 {
     load_freq();
     atexit(save_freq);
+    load_stopwords();
     // Load config files, if any.
     TrieNode *root = trie_new_node();
     load_commands(root);

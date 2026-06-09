@@ -61,19 +61,18 @@ void compress_error(char *error,char *out){
         
         char *start=strchr(temp,'\'');
         if(start){
-            strncpy(out,error,start-error+1);
-            out[start-error+1]='\0';
+            strncpy(out,error,start-error);
+            out[start-error]='\0';
             start++;
             char *end=strchr(start,'\'');
             if(end){
             char *after=end+1;
                 *end='\0';
-                
                 char *base=basename(start);
                 strcat(out,base);
                 strcat(out,"'");
                 strcat(out,after);
-        }    
+            }    
     }
 }
 

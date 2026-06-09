@@ -1,5 +1,4 @@
 
-#include "ai.h"
 #include <libgen.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -422,6 +421,47 @@ int lsh_cd(char **args)
    @return Always returns 1, to continue executing.
  */
 
+char *ask_chat(char *input){
+        char message[4096];
+        snprintf(message,sizeof(message),"chat:%s",input);
+        
+        int fin= open("/tmp/aish_in",O_WRONLY | O_NONBLOCK);
+        if(fin<0) return NULL;
+        write(fin,message,strlen(message));
+        close(fin);
+
+        int fout=open("/tmp/aish_out",O_RDONLY);
+        if(fout<0) return NULL;
+        char *response = malloc(4096);
+        int n = read(fout,response,4095);
+        if(n>0) response[n]='\0';
+        close(fout);
+        return response;
+        
+
+}
+
+char *ask_nlp(char *input){
+    char cwd[2048];
+    getcwd(cwd,sizeof(cwd));
+    char message[4096];
+    snprintf(message, sizeof(message), "nlp:%s %s",cwd,input);
+       // write to aish_in
+    int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
+    if(fin < 0) return NULL;
+    write(fin, message, strlen(message));
+    close(fin);
+    
+    // read response from aish_out
+    int fout = open("/tmp/aish_out", O_RDONLY);
+    if(fout < 0) return NULL;
+    char *response = malloc(4096);
+    int n = read(fout, response, 4095);
+    if(n > 0) response[n] = '\0';
+    close(fout);
+    return response;
+}
+
 int lsh_help(char **args)
 {
     int i;
@@ -748,6 +788,12 @@ int lsh_execute(char **args)
         if(args[i+1] != NULL) strcat(message, " ");
         i++;
         } 
+        char *cmd = ask_chat(message);
+        if(cmd!=NULL){
+            printf("Aish: \033[32m%s\033[0m\n", cmd);
+            fflush(stdout);
+            free(cmd);
+        }
         save_memory(args);
         return 1;
 

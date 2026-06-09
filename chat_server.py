@@ -23,7 +23,7 @@ while True:
 
     data = conn.recv(4096).decode()
 
-    response=requests.post("https://localhost:11434/api/generate",json={
+    response=requests.post("http://localhost:11434/api/generate",json={
         "model":"qwen3.5:9b",
         "prompt":data,
         "stream":True,

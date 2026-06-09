@@ -34,6 +34,7 @@ volatile sig_atomic_t flag=0;
 volatile pid_t done_pid=0;
 
 void sigchld_handler(int sig){
+    (void)sig;
     int saved_errno = errno;
     pid_t done;
     while((done=waitpid(-1,NULL,WNOHANG))>0){
@@ -206,7 +207,7 @@ int lsh_mode(char **args){
     }
     else if(strcmp(args[1], "chat")==0 || strcmp(args[1],"Shell")==0){
         shell_mode=2;
-        printf("switched to shell mode\n");
+        printf("switched to chat mode\n");
     }
 
 
@@ -395,6 +396,7 @@ int lsh_num_builtins() {
     return sizeof(builtin_str) / sizeof(char *);
 }
 int lsh_history(char **args){
+    (void)args;
     int i;
     for(i=0;i<history_count && i<history_size;i++){
         printf("%d) %s\n",i + 1,history[i]);
@@ -424,6 +426,7 @@ int lsh_cd(char **args)
 
 int lsh_help(char **args)
 {
+    (void)args;
     int i;
     printf("Aswin's Shell LSH\n");
     printf("Type program names and arguments, and hit enter.\n");
@@ -439,6 +442,7 @@ int lsh_help(char **args)
 
 int lsh_exit(char **args)
 {
+    (void)args;
     return 0;
 }
 
@@ -449,7 +453,6 @@ typedef struct{
 
 OpResult lsh_find_andor(char **args){
             OpResult result;
-            int flag=0;
             for(int i=0;args[i]!=NULL;i++){
                 if (strcmp(args[i], "&&")==0){
                                result.index=i;
@@ -577,7 +580,7 @@ int lsh_launch(char **args)
         return 1;
     }
     int is_background=lsh_is_background(args);
-    pid_t pid, wpid;
+    pid_t pid;
     int status;
 
     pid = fork();
@@ -604,7 +607,7 @@ int lsh_launch(char **args)
         }
         else{
             do {
-                wpid = waitpid(pid, &status, WUNTRACED);
+                waitpid(pid, &status, WUNTRACED);
             } while (!WIFEXITED(status) && !WIFSIGNALED(status));
             last_exit_status = WEXITSTATUS(status);
             if(WIFSIGNALED(status)){
@@ -741,13 +744,14 @@ int lsh_execute(char **args)
     }
     else if(shell_mode==2){
         char message[4096];
-        strcpy(message, "chat:");
+        message[0]='\0';
         int i = 0;
         while(args[i] != NULL){
         strcat(message, args[i]);
         if(args[i+1] != NULL) strcat(message, " ");
         i++;
         } 
+        ask_chat(message);
         save_memory(args);
         return 1;
 
@@ -1215,6 +1219,8 @@ void lsh_loop(TrieNode *root)
  */
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
     load_freq();
     atexit(save_freq);
     load_stopwords();
@@ -1240,8 +1246,25 @@ int main(int argc, char **argv)
         exit(0);
         
     }
+    pid_t chat_pid = fork();
+    if(chat_pid==0){
+            int devnull = open("/dev/null", O_WRONLY);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+            
+
+            char chat_path[256];
+            snprintf(chat_path, sizeof(chat_path), "%s/.config/aish/chat_server.py",getenv("HOME"));
+            char *chat_args[]={"python3",chat_path,NULL};
+            execvp(chat_args[0],chat_args);
+            exit(0);
+        }
+
+    
     lsh_loop(root);
     kill(aish_pid, SIGTERM);
+    kill(chat_pid,SIGTERM);
     // Perform any shutdown/cleanup.
 
     return EXIT_SUCCESS;

@@ -51,6 +51,7 @@ void save_candidates(){
 }
 
 void add_candidate(char *word){
+    (void)word;
     // increment count, promote if threshold hit
 }
 

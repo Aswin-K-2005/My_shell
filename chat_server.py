@@ -3,6 +3,7 @@ import os
 import sys
 import requests
 import json
+from context.history import save_message,load_history
 
 sys.path.insert(0, os.path.expanduser("~/.config/aish"))
 from retriever import retrieve
@@ -16,11 +17,23 @@ server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 server.bind(sock_path)
 server.listen(1)
 
+
+
 while True:
     conn, _ = server.accept()
     conn.settimeout(5.0)
     
-    # read all data until sentinel
+    # read all data until sentinel]
+    history=load_history(10)
+    history=history[:-1]
+    history_context=""
+    for msg in history:
+        history_context+=(
+                f"{msg['role']}:" 
+                f"{msg['content']}\n" 
+                f"{msg['timestamp']}\n" 
+            )
+            
     data = b""
     try:
         while True:
@@ -34,6 +47,7 @@ while True:
     except:
         pass
     data = data.decode()
+    save_message("user",data)
     
     # retrieve relevant context from codebase
     try:
@@ -50,11 +64,17 @@ while True:
         prompt = f"""You are Aish, an AI assistant for a developer.
 Analyze the code and answer the question clearly and concisely.
 Do not try to complete or fix the code unless asked.
-
+ 
+Recent conversation:
+{history_context}
+ 
+ Query:
 {data}"""
     else:
         prompt = f"""You are Aish, an AI coding assistant with access to the developer's codebase.
-
+Recent Conversation:
+{history_context} 
+ 
 Relevant code context:
 {context}
 
@@ -76,14 +96,16 @@ Aish:"""
         },
         stream=True
     )
-    
+    full_response="" 
     # send each token to C
     for line in response.iter_lines():
         if line:
             chunk = json.loads(line)
             token = chunk.get("response", "")
             if token:
+                full_response+=token
                 conn.send(token.encode())
-    
+       
+    save_message("assistant",full_response)
     conn.send(b"__END__")
     conn.close()

@@ -1,7 +1,11 @@
 import socket
 import os
+import sys
 import requests
 import json
+
+sys.path.insert(0, os.path.expanduser("~/.config/aish"))
+from retriever import retrieve
 
 sock_path = "/tmp/aish_chat.sock"
 
@@ -14,20 +18,34 @@ server.listen(1)
 
 while True:
     conn, _ = server.accept()
+    conn.settimeout(5.0)
     
     # read all data until sentinel
     data = b""
-    while True:
-        chunk = conn.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-        if b"__MSG_END__" in data:
-            data = data.replace(b"__MSG_END__", b"")
-            break
+    try:
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if b"__MSG_END__" in data:
+                data = data.replace(b"__MSG_END__", b"")
+                break
+    except:
+        pass
     data = data.decode()
     
-    # build prompt based on content
+    # retrieve relevant context from codebase
+    try:
+        results = retrieve(data, n_results=3)
+        context = ""
+        for filepath, chunk in results:
+            filename = os.path.basename(filepath)
+            context += f"\n--- From {filename} ---\n{chunk}\n"
+    except:
+        context = ""
+    
+    # build prompt based on content type
     if "Content:" in data and "Question:" in data:
         prompt = f"""You are Aish, an AI assistant for a developer.
 Analyze the code and answer the question clearly and concisely.
@@ -35,8 +53,13 @@ Do not try to complete or fix the code unless asked.
 
 {data}"""
     else:
-        prompt = f"""You are Aish, a helpful AI assistant for developers.
-Answer concisely and technically.
+        prompt = f"""You are Aish, an AI coding assistant with access to the developer's codebase.
+
+Relevant code context:
+{context}
+
+Answer the question using the context above when relevant.
+Be concise and technical.
 
 User: {data}
 Aish:"""

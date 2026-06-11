@@ -1,5 +1,5 @@
-#ifndef COMPRESS_H
-#define COMPRESS_H
+#ifndef compress_h
+#define compress_h
 
 void compress_error(char *error, char *out);
 void compress_nlp(char **args, char *out);

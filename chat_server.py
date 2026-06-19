@@ -25,7 +25,6 @@ while True:
     
     # read all data until sentinel]
     history=load_history(10)
-    history=history[:-1]
     history_context=""
     for msg in history:
         history_context+=(

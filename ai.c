@@ -17,20 +17,6 @@ void ask_chat(char *input) {
   char temp[4096];
   strncpy(temp, input, sizeof(temp) - 1);
 
-  char *word = strtok(temp, " ");
-  while (word != NULL) {
-    if (access(word, F_OK) == 0) {
-      strncpy(detected_file, word, sizeof(detected_file) - 1);
-      FILE *f = fopen(detected_file, "r");
-      if (f) {
-        fread(file_content, 1, sizeof(file_content) - 1, f);
-        fclose(f);
-      }
-      break;
-    }
-
-    word = strtok(NULL, " ");
-  }
   char message[20480];
   if (strlen(file_content) > 0) {
     snprintf(message, sizeof(message), "FILE : %s\nContent:\n%s\n\nQuestion:%s",
@@ -56,7 +42,6 @@ void ask_chat(char *input) {
     close(sock);
     return;
   }
-
   write(sock, message, strlen(message));
   write(sock, "__MSG_END__", 11);
   char buf[256];

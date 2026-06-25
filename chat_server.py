@@ -6,7 +6,11 @@ import json
 from context.history import save_message,load_history
 
 sys.path.insert(0, os.path.expanduser("~/.config/aish"))
-from retriever import retrieve
+from retriever import (
+    retrieve,
+    retrieve_from_file,
+    extract_filename,
+)
 
 sock_path = "/tmp/aish_chat.sock"
 
@@ -46,18 +50,44 @@ while True:
     except:
         pass
     data = data.decode()
+    print("INPUT LEN:", len(data))
     save_message("user",data)
     
     # retrieve relevant context from codebase
     try:
-        results = retrieve(data, n_results=3)
+        filename = extract_filename(data)
+
+        if filename:
+            print(f"FILE DETECTED: {filename}")
+
+            results = retrieve_from_file(
+            filename,
+            data,
+            n_results=5
+            )
+        else:
+            results = retrieve(
+                data,
+                 n_results=3
+            )
+
+        print("RETRIEVED FILES:")
+
         context = ""
+
         for filepath, chunk in results:
-            filename = os.path.basename(filepath)
-            context += f"\n--- From {filename} ---\n{chunk}\n"
-    except:
-        context = ""
-    
+            print(filepath)
+
+            short_name = os.path.basename(filepath)
+
+            context += (
+                f"\n--- From {short_name} ---\n"
+                f"{chunk}\n"
+        )
+
+    except Exception as e:
+        print("RETRIEVAL ERROR:", e)
+        context = ""    
     # build prompt based on content type
     if "Content:" in data and "Question:" in data:
         prompt = f"""You are Aish, an AI assistant for a developer.
@@ -82,7 +112,7 @@ Be concise and technical.
 
 User: {data}
 Aish:"""
-    
+    print("PROMPT LEN:", len(prompt))
     # stream from ollama
     response = requests.post(
         "http://localhost:11434/api/generate",
@@ -103,8 +133,13 @@ Aish:"""
             token = chunk.get("response", "")
             if token:
                 full_response+=token
+                print("TOKEN:", repr(token), flush=True)
                 conn.send(token.encode())
        
     save_message("assistant",full_response)
+    print("FULL RESPONSE:", repr(full_response))
+    print("FULL RESPONSE LEN:", len(full_response))
+
+
     conn.send(b"__END__")
     conn.close()

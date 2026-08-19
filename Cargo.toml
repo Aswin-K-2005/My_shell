@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "memory_engine",
+    "ai_orchestrator",
+    "shared_types"
+]
+resolver = "2"

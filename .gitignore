@@ -1,5 +1,37 @@
+# Compiled C Binaries
 a.out
-out.txt
+aish
+agg
+
+# Rust
+target/
+**/target/
+Cargo.lock
+
+# Databases & AI Models
+models/
+.lancedb_data/
+.fjall_data_ipc/
+
+# Python (Just in case you ever use a venv again)
 venv/
-memory_engine/target/
+__pycache__/
+*.pyc
+*.pyo
+
+# OS & Sockets
+.DS_Store
+*.sock
+/tmp/*.sock
+
+# Temp files
+out.txt
+
+
+# ML and DB Caches
+.fastembed_cache/
+**/.fastembed_cache/
+.lancedb_ipc/
+.fjall_data/
+**/.fjall_data/
 

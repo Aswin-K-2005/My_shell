@@ -454,33 +454,6 @@ void lsh_split_andor(char **args, int index, char **left, char **right) {
   right[pos] = NULL;
 }
 
-void ask_ai(char *error) {
-  char compressed[4096];
-  compress_error(error, compressed);
-
-  char message[8192];
-  snprintf(message, sizeof(message), "error:%s", compressed);
-  int fin = open("/tmp/aish_in", O_WRONLY | O_NONBLOCK);
-  if (fin < 0) {
-    return;
-  }
-  write(fin, message, strlen(message));
-  close(fin);
-  // read response from aish_out
-  int fout = open("/tmp/aish_out", O_RDONLY);
-  if (fout < 0) {
-    perror("aish_out");
-    return;
-  }
-  char response[8192];
-  int n = read(fout, response, sizeof(response) - 1);
-  if (n > 0) {
-    response[n] = '\0';
-    printf("\033[33m[aish AI]: %s\033[0m\n", response);
-  }
-  close(fout);
-}
-
 int lsh_run_get_status(char **args);
 
 int lsh_launch(char **args) {
@@ -512,7 +485,6 @@ int lsh_launch(char **args) {
     char **left = malloc(sizeof(char *) * LSH_RL_BUFSIZE);
     char **right = malloc(sizeof(char *) * LSH_RL_BUFSIZE);
     lsh_split_pipe(args, pipe_index, left, right);
-
     int pipefd[2];
     if (pipe(pipefd) == -1) {
       perror("lsh");
@@ -600,8 +572,17 @@ int lsh_launch(char **args) {
         int n = read(stderr_pipe[0], error_buf, sizeof(error_buf) - 1);
         if (n > 0) {
           error_buf[n] = '\0';
-          // send to AI — we'll add this next
-          ask_ai(error_buf);
+          // Build a single string from the args array
+          char full_command[1024] = "";
+          for (int i = 0; args[i] != NULL; i++) {
+            strcat(full_command, args[i]);
+            if (args[i + 1] != NULL) {
+              strcat(full_command, " ");
+            }
+          }
+
+          // Now full_command holds "activate hyperdrive"
+          ask_ai(full_command, error_buf);
         }
       }
       close(stderr_pipe[0]);
@@ -648,43 +629,37 @@ void save_memory(char **args) {
       strcat(command, " ");
   }
 
+  // Escape raw command for safe JSON transmission
+  char escaped_command[8192];
+  json_escape(command, escaped_command, sizeof(escaped_command));
+
+  // Generate ISO 8601 UTC Timestamp
+  time_t now = time(NULL);
+  struct tm *t_utc = gmtime(&now);
+  char iso_time[64];
+  strftime(iso_time, sizeof(iso_time), "%Y-%m-%dT%H:%M:%SZ", t_utc);
+
+  // Format valid JSON payload
+  char json_payload[16384];
+  snprintf(json_payload, sizeof(json_payload),
+           "{\n"
+           "  \"session_id\": \"%d\",\n"
+           "  \"raw_command\": \"%s\",\n"
+           "  \"working_directory\": \"%s\",\n"
+           "  \"exit_code\": %d,\n"
+           "  \"start_timestamp\": \"%s\",\n"
+           "  \"execution_duration_ms\": 0\n"
+           "}",
+           getpid(), escaped_command, cwd, last_exit_status, iso_time);
+
+  // Dispatch directly to Rust Fjall logger
+  send_telemetry_to_rust(json_payload);
+
   FILE *f = fopen(path, "w");
-  if (!f)
-    return;
-
-  char *project_type = "unknown";
-  if (access("package.json", F_OK) == 0)
-    project_type = "nodejs";
-  else if (access("requirements.txt", F_OK) == 0)
-    project_type = "python";
-  else if (access("Cargo.toml", F_OK) == 0)
-    project_type = "rust";
-  else if (access("pom.xml", F_OK) == 0)
-    project_type = "java";
-  else if (access("Makefile", F_OK) == 0)
-    project_type = "c/cpp";
-  // check for .c files
-  if (strcmp(project_type, "unknown") == 0) {
-    DIR *d = opendir(".");
-    if (d) {
-      struct dirent *entry;
-      while ((entry = readdir(d)) != NULL) {
-        char *ext = strrchr(entry->d_name, '.');
-        if (ext && strcmp(ext, ".c") == 0) {
-          project_type = "c";
-          break;
-        }
-      }
-      closedir(d);
-    }
+  if (f) {
+    fprintf(f, "%s", json_payload);
+    fclose(f);
   }
-
-  fprintf(f, "{\n");
-  fprintf(f, "  \"last_dir\": \"%s\",\n", cwd);
-  fprintf(f, "  \"last_command\": \"%s\",\n", command);
-  fprintf(f, "  \"project_type\": \"%s\"\n", project_type);
-  fprintf(f, "}\n");
-  fclose(f);
 }
 
 int lsh_execute(char **args) {

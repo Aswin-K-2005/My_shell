@@ -7,3 +7,14 @@ edition = "2024"
 bstr = "1.0"
 serde = {version="1.0",features = ["derive"]}
 serde_json = "1.0"
+fjall = "2.11"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+fastembed = "4"
+lancedb = "0.14"
+arrow-array = "53"
+arrow-schema = "53"
+anyhow = "1.0.104"
+futures = "0.3.33"
+uuid = { version = "1.0", features = ["v4"] }
+shared_types = { path = "../shared_types" }

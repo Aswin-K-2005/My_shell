@@ -1,0 +1,19 @@
+[package]
+name = "ai_orchestrator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared_types = { path = "../shared_types" }
+memory_engine = { path = "../memory_engine" }
+
+llama-cpp-2 = { version = "0.1.154", features = ["vulkan"] }
+tokio = { version = "1.0", features = ["full", "io-util", "net"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+arrow-array = "53"
+arrow-schema = "53"
+futures = "0.3"
+uuid = { version = "1.7", features = ["v4", "fast-rng"] }
+lancedb = "0.14.1" # <-- ADD THIS LINE!

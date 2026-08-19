@@ -1,7 +1,7 @@
 # aish 🐚
 ### Aswin's Intelligent Shell
 
-A Unix shell built from scratch in C, evolving into a fully AI-powered intelligent terminal.
+A Unix shell built from scratch in C, supercharged by a highly optimized, local AI orchestrator written in Rust.
 
 > Built by [Aswin K](https://github.com/Aswin-K-2005) — Legion 5i Pro + i9 + RTX 4070Ti doing the heavy lifting.
 
@@ -9,228 +9,129 @@ A Unix shell built from scratch in C, evolving into a fully AI-powered intellige
 
 ## What is aish?
 
-Most people use a shell without understanding what happens when they press Enter. aish is built from zero using raw C and POSIX system calls — no shortcuts, no libraries. Every feature you see was written line by line.
+Most people use a shell without understanding what happens when they press Enter. **aish** started as a learning project built from zero using raw C and POSIX system calls — no shortcuts, no libraries. 
 
-The end goal: a standalone AI-powered terminal (like Warp) with a local LLM that explains errors, suggests commands, and understands natural language — running entirely offline.
-
----
-
-## Current features
-
-| Feature | Status |
-|---------|--------|
-| Command execution | ✅ |
-| Builtins — cd, help, history, exit | ✅ |
-| Output redirection `>` | ✅ |
-| Append redirection `>>` | ✅ |
-| Input redirection `<` | ✅ |
-| Piping `\|` | ✅ |
-| Pipe + redirection combined | ✅ |
-| Background jobs `&` | ✅ |
-| Job completion notification | ✅ |
-| Raw mode + arrow key history | ✅ |
-| Left/Right cursor movement | ✅ |
-| ghost text autocomplete | ✅ |
-| Tab autocomplete (Trie) | ✅ |
-| AI error explanation | ✅ |
-| Natural language → command | 🔜 |
-| Qt GUI (Warp-style) | 🔜 |
+It has since evolved into a **Cognitive AI Terminal**. Instead of relying on cloud APIs or slow Python wrappers, `aish` uses a native Rust orchestrator communicating via Unix sockets to run local LLMs (via `llama.cpp`) and a native RAG memory engine. It learns from your daily workflow, predicts fixes, and acts as a local Agentic assistant—all running entirely offline.
 
 ---
 
-## Built with
+## Current Features
 
-- **Language** — C
-- **Core syscalls** — `fork()`, `execvp()`, `waitpid()`, `dup2()`, `pipe()`, `open()`
-- **Terminal** — `termios` raw mode, ANSI escape codes
-- **Signals** — `SIGCHLD` for background job notifications
-- **No external libraries** — pure C and POSIX
-
----
-
-## Build and run
-
-```bash
-# clone
-git clone https://github.com/Aswin-K-2005/My_shell.git
-cd My_shell
-
-# compile
-gcc shell.c -o shell
-
-# run
-./shell
-```
-
----
-
-## Usage
-
-```bash
-# basic commands
-> ls -la
-> cd /tmp && pwd
-
-# redirection
-> ls > out.txt          # write to file
-> echo hello >> out.txt # append to file
-> sort < out.txt        # read from file
-
-# piping
-> ls | grep .c
-> ls | grep .c > out.txt
-
-# background jobs
-> sleep 5 &
-[background] pid: 1234
->                        # prompt returns immediately
-[done] pid: 1234         # notified when job finishes
-
-# history
-> history               # view last 100 commands
-# press ↑ ↓             # navigate history
-```
-
----
-
-## Architecture
-
-```
-you type a command
-       │
-       ▼
-lsh_read_line_raw()     raw mode input — handles arrow keys,
-                        backspace, history navigation
-       │
-       ▼
-lsh_split_line()        tokenizes into argv[] using strtok
-       │
-       ▼
-lsh_execute()           checks builtins or external command
-      / \
-     /   \
-builtin   external
-  │          │
-runs       fork()
-directly     ├── child → lsh_handle_redirections() → execvp()
-             └── parent → waitpid() or background
-```
-
----
-
-## How key features work
-
-### Piping
-```
-ls | grep .c
-
-fork child 1 → dup2(pipefd[1], stdout) → execvp ls
-fork child 2 → dup2(pipefd[0], stdin)  → execvp grep
-parent → close both ends → waitpid both children
-```
-
-### Redirection
-```
-ls > out.txt
-
-open("out.txt", O_WRONLY | O_CREAT | O_TRUNC)
-dup2(fd, STDOUT_FILENO)
-execvp ls → output goes to file instead of terminal
-```
-
-### Background jobs
-```
-sleep 5 &
-
-fork() → parent does NOT waitpid → returns to prompt
-SIGCHLD handler fires when child dies → sets flag
-lsh_loop prints [done] notification between commands
-```
-
-### Raw mode
-```
-termios turns off ECHO and ICANON
-every keypress arrives immediately
-ESC [ A → up arrow → navigate history
-ESC [ B → down arrow
-127     → backspace → redraw line
-```
-
----
-
-## Project structure
-
-```
-My_shell/
-├── new.c
-├── aish_ai.py
-├── install.sh
-└── README.md
-```
-
-
----
-
-## Roadmap 🚀
-
-### Phase 2 — Shell polish (current)
+### 💻 Core Shell (C & POSIX)
+- [x] Command execution & standard Builtins (`cd`, `help`, `history`, `exit`)
+- [x] Output/Input redirection (`>`, `>>`, `<`) and Piping (`|`)
+- [x] Background jobs (`&`) with job completion notifications
 - [x] Raw mode + arrow key history
-- [x] Tab autocomplete with Trie data structure
-- [x] Left/right cursor traversal
-- [x] Ghost text with right arrow accept
-- [X] `&&` and `||` operators
-- [ ] Startup mode selector (work/chill/nothing)
-  - work → opens last project + neovim + spotify
-  - chill → opens YouTube in Brave
+- [x] Ghost text & Tab autocomplete (Trie structure)
+- [x] Logical operators (`&&` and `||`)
 
-### Phase 3 — Local AI (next)
-- [X] ollama + CodeLlama 7B running locally
-- [X] Capture stderr from failed commands
-- [X] AI explains errors in plain English
-- [ ] Natural language → shell command translation
-- [ ] Context-aware command suggestions
-
-### Phase 4 — Fine-tuning
-- [ ] Collect shell command + error dataset
-- [ ] Fine-tune with LoRA on RTX 4070Ti
-- [ ] Quantize to 4-bit for fast CPU inference
-- [ ] Ship model bundled with aish
-
-### Phase 5 — Qt GUI
-- [ ] Standalone terminal window (Qt6/C++)
-- [ ] Command blocks — grouped input/output like Warp
-- [ ] AI explanation panel alongside terminal
-- [ ] Syntax highlighting in input
-- [ ] Startup mode selector UI
+### 🧠 AI & Memory Engine (Rust)
+- [x] **Local AI Inference**: Bare-metal `llama.cpp` integration (Vulkan accelerated).
+- [x] **Lexical VRAM Hot-Swapping**: Keeps a fast 1.5B model pinned for instant auto-fixes, dynamically loads 7B/14B models for deep architectural reasoning.
+- [x] **Semantic RAG Memory**: Uses `FastEmbed` and `LanceDB` to vector-search past shell errors and learn custom fixes over time.
+- [x] **Short-Term Context**: Uses `Fjall` for ultra-fast IPC state tracking.
+- [x] **Cognitive Routing**: Rust natively calculates heuristics to determine if it should provide an instant fix or trigger deep reasoning.
+- [ ] **Agentic Tool Use**: (WIP) ReAct loop allowing the LLM to execute `grep`, `cat`, and file searches directly in the shell.
 
 ---
 
-## What I learned building this
+## Build and Run
 
-| Concept | Where it's used |
-|---------|----------------|
-| `fork()` + `execvp()` | every external command |
-| `dup2()` + file descriptors | redirection and pipes |
-| `pipe()` | connecting two processes |
-| `waitpid()` + `WNOHANG` | background jobs |
-| `SIGCHLD` signal handling | job completion notification |
-| `termios` raw mode | arrow keys, backspace |
-| ANSI escape codes | line redrawing |
-| Circular buffer + modulo | history without dynamic alloc |
-| Function pointers | builtin command dispatch |
-| `strtok` | command tokenization |
-| `volatile sig_atomic_t` | signal-safe flag |
-| DRY refactoring | unified redirection handler |
+### Prerequisites
+- GCC / Clang
+- Rust & Cargo (`rustc 1.75+`)
+- Local GGUF Models (placed in `models/` directory)
 
----
+### 1. Build the Rust AI Orchestrator
+```bash
+# Compile the memory engine and inference backend
+cargo build --release
 
-## References
+2. Compile the C Shell
+Bash
+# Compile the shell with AI socket extensions
+make 
 
-- [Write a Shell in C — Stephen Brennan](https://brennan.io/2015/01/16/write-a-shell-in-c/)
-- [Build Your Own Text Editor — kilo](http://viewsourcecode.org/snaptoken/kilo/)
-- [project-based-learning repo](https://github.com/practical-tutorials/project-based-learning)
-- Linux man pages: `fork(2)`, `execvp(3)`, `waitpid(2)`, `dup2(2)`, `pipe(2)`, `termios(3)`
+3. Run
+Bash
+# Start the shell (the orchestrator daemon will handle AI requests)
+./aish
 
----
+Architecture
+aish uses a decoupled architecture. The C shell handles raw POSIX operations and UI, while the heavy AI lifting is pushed to an asynchronous Rust backend over IPC.
 
-*aish is actively being developed. Star it to follow the journey from shell → AI terminal.*`:
+┌────────────────────────┐
+                  │   Unix Socket Client   │ (aish C Shell)
+                  └───────────┬────────────┘
+                              │ raw_request
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   ai_orchestrator (Rust)                    │
+│                                                             │
+│ 1. Socket Listener   ──> Receives raw command payload       │
+│ 2. Query Sanitizer   ──> Formats search query for LanceDB   │
+│ 3. Cognitive Router  ──> Option 1 Prompt Branching          │
+│ 4. Worker Thread     ──> Lexical Scope VRAM Hot-Swapper     │
+│ 5. Llama-cpp Driver  ──> run_inference() (Vulkan GPU)       │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+               ▼                              ▼
+┌──────────────────────────────┐  ┌───────────────────────────┐
+│       memory_engine          │  │       consolidator        │
+│                              │  │                           │
+│ • Runs FastEmbed vectorizer  │  │ • Background Tokio loop   │
+│ • Queries LanceDB vectors    │  │ • Scans Fjall short-term  │
+│ • Ranks & compresses rules   │  │ • Writes long-term rules  │
+└──────────────────────────────┘  └───────────────────────────┘
+
+Project Structure
+
+My_shell/
+├── ai.c / ai.h           # C Shell: AI Unix socket communication
+├── new.c                 # C Shell: POSIX process & input management
+├── ai_orchestrator/      # Rust: Tokio async server & llama.cpp bindings
+├── memory_engine/        # Rust: FastEmbed, LanceDB, and Fjall IPC
+├── shared_types/         # Rust: Shared data structures across workspaces
+├── models/               # Local GGUF weights (git-ignored)
+└── Cargo.toml            # Rust workspace definition
+
+
+
+Roadmap 🚀
+Phase 1 & 2 — Shell Polish (Completed)
+Raw mode, autocomplete, piping, redirection, background jobs.
+
+Phase 3 — Systems-Level AI Integration (Current)
+[x] Replace Python/cloud APIs with native Rust/llama.cpp.
+
+[x] Build semantic memory engine (LanceDB/FastEmbed).
+
+[x] Implement VRAM resource management for SLMs.
+
+[ ] Implement C-side popen() for Agentic Tool Execution <tool_call>.
+
+Phase 4 — The Cognitive Loop
+[ ] Upgrade memory schema to track success/failure confidence rates.
+
+[ ] Enable the orchestrator to dynamically manage context windows for codebase ingestion.
+
+[ ] Daemonize the orchestrator as a background OS service.
+
+Concept,Where it's used
+C / POSIX Systems,"fork(), execvp(), dup2(), waitpid(), SIGCHLD, termios"
+Inter-Process Comm.,Unix Domain Sockets connecting C to Rust
+Concurrency (Rust),"Tokio async/await, mpsc channels, multi-threading"
+Memory Bounds,Lexical scoping to force VRAM allocation/deallocation
+Machine Learning,"Quantized GGUF inference, Vector Embeddings, RAG Pipelines"
+Constrained Decoding,Probability redistribution and LLM cognitive branching
+
+References
+Write a Shell in C — Stephen Brennan
+
+Build Your Own Text Editor — kilo
+
+Linux man pages: fork(2), execvp(3), waitpid(2), dup2(2), pipe(2), termios(3)
+
+llama.cpp and tokio documentation.
+
+aish is actively being developed as a daily-driver tool. Star it to follow the journey from a basic shell to an autonomous system.

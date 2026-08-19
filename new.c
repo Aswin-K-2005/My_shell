@@ -9,13 +9,79 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h> // For Linux process death signal
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+
 pid_t background_pids[100];
 int background_count = 0;
+
+void start_ai_orchestrator() {
+  // 1. Check if the socket file exists
+  if (access("/tmp/aish_chat.sock", F_OK) != -1) {
+
+    // File exists! Test if the Rust daemon is actually listening on it.
+    int test_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr;
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/tmp/aish_chat.sock", sizeof(addr.sun_path) - 1);
+
+    if (connect(test_sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+      // Success! The daemon is alive and healthy.
+      close(test_sock);
+      return;
+    } else {
+      // Connection failed! The Rust process died but left the file behind.
+      printf("🧹 Found dead socket. Cleaning it up...\n");
+      close(test_sock);
+      unlink("/tmp/aish_chat.sock"); // DELETE THE FILE AUTOMATICALLY
+    }
+  }
+
+  printf("🚀 Booting AI Orchestrator daemon...\n");
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    perror("Failed to fork AI orchestrator");
+    return;
+  }
+
+  if (pid == 0) { // Child Process
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+    int log_fd =
+        open("/tmp/aish_orchestrator.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (log_fd >= 0) {
+      dup2(log_fd, STDOUT_FILENO);
+      dup2(log_fd, STDERR_FILENO);
+      close(log_fd);
+    }
+
+    int null_fd = open("/dev/null", O_RDONLY);
+    if (null_fd >= 0) {
+      dup2(null_fd, STDIN_FILENO);
+      close(null_fd);
+    }
+
+    // Absolute Path to your Rust binary
+    char exe_path[512];
+    snprintf(exe_path, sizeof(exe_path),
+             "%s/coding/My_shell/target/release/ai_orchestrator",
+             getenv("HOME"));
+
+    execl(exe_path, "ai_orchestrator", NULL);
+
+    perror("Failed to exec ai_orchestrator");
+    exit(1);
+  }
+
+  usleep(500000);
+}
 
 void add_background_pid(pid_t pid) {
   background_pids[background_count++] = pid;
@@ -1145,7 +1211,7 @@ int main(int argc, char **argv) {
   (void)argv;
   load_freq();
   atexit(save_freq);
-  load_stopwords();
+  start_ai_orchestrator();
   // Load config files, if any.
   TrieNode *root = trie_new_node();
   load_commands(root);
@@ -1157,35 +1223,8 @@ int main(int argc, char **argv) {
   signal(SIGCHLD, sigchld_handler);
   signal(SIGINT, SIG_IGN);
   // Run command loop.
-  mkfifo("/tmp/aish_in", 0666);
-  mkfifo("/tmp/aish_out", 0666);
-  pid_t aish_pid = fork();
-  if (aish_pid == 0) {
-    char ai_path[256];
-    snprintf(ai_path, sizeof(ai_path), "%s/.config/aish/aish_ai.py",
-             getenv("HOME"));
-    char *python_args[] = {"python3", ai_path, NULL};
-    execvp("python3", python_args);
-    exit(0);
-  }
-  pid_t chat_pid = fork();
-  if (chat_pid == 0) {
-    int devnull = open("/dev/null", O_WRONLY);
-    dup2(devnull, STDOUT_FILENO);
-    dup2(devnull, STDERR_FILENO);
-    close(devnull);
-
-    char chat_path[256];
-    snprintf(chat_path, sizeof(chat_path), "%s/.config/aish/chat_server.py",
-             getenv("HOME"));
-    char *chat_args[] = {"python3", chat_path, NULL};
-    execvp(chat_args[0], chat_args);
-    exit(0);
-  }
 
   lsh_loop(root);
-  kill(aish_pid, SIGTERM);
-  kill(chat_pid, SIGTERM);
   // Perform any shutdown/cleanup.
 
   return EXIT_SUCCESS;

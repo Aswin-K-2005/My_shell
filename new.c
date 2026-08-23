@@ -235,14 +235,17 @@ int lsh_mode(char **args) {
   if (args[1] == NULL) {
     if (shell_mode == 2) {
       printf("current mode: %s\n", "chat");
+      notify_rust_vram_state("entered_chat");
       return 1;
     }
     if (shell_mode == 1) {
       printf("current mode: %s\n", "nlp");
+      notify_rust_vram_state("exited_chat");
       return 1;
     }
     if (shell_mode == 0) {
       printf("current mode: %s\n", "shell");
+      notify_rust_vram_state("exited_chat");
       return 1;
     }
   }
@@ -259,7 +262,7 @@ int lsh_mode(char **args) {
 
   else {
     printf("unknown mode: %s\n", args[1]);
-    printf("Available modes : nlp shell\n");
+    printf("Available modes : nlp shell chat\n");
   }
   return 1;
 }
@@ -583,11 +586,8 @@ int lsh_launch(char **args) {
       close(pipefd[1]);
       dup2(pipefd[0], STDIN_FILENO);
       close(pipefd[0]);
-      lsh_handle_redirections(right);
-
-      execvp(right[0], right);
-      perror("lsh");
-      exit(EXIT_FAILURE);
+      lsh_launch(right);
+      exit(last_exit_status);
     }
 
     close(pipefd[0]);
@@ -1226,6 +1226,6 @@ int main(int argc, char **argv) {
 
   lsh_loop(root);
   // Perform any shutdown/cleanup.
-
+  notify_rust_vram_state("exited_chat");
   return EXIT_SUCCESS;
 }

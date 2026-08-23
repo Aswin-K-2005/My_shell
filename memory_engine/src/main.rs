@@ -3,6 +3,8 @@ mod semantic;
 mod storage;
 mod vector_store;
 
+use std::sync::Arc;
+
 use semantic::SemanticMemory;
 use storage::WorkingMemoryStore;
 use vector_store::VectorStore;
@@ -18,7 +20,6 @@ async fn main() -> Result<(), anyhow::Error> {
     println!("⚡ JARVIS Memory Daemon Online!");
 
     // Start listening on /tmp/aish.sock
-    ipc::start_ipc(fjall_db, lancedb, semantic).await?;
-
+    ipc::start_ipc(Arc::new(fjall_db), Arc::new(lancedb), Arc::new(semantic)).await?;
     Ok(())
 }

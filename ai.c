@@ -27,6 +27,26 @@ void json_escape(const char *src, char *dest, size_t dest_size) {
   }
   dest[j] = '\0';
 }
+void notify_rust_vram_state(const char *event_type) {
+  int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sock < 0)
+    return;
+
+  struct sockaddr_un addr;
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, "/tmp/aish_chat.sock", sizeof(addr.sun_path) - 1);
+
+  if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+    char payload[256];
+    // Send the JSON trigger with our Process ID and the required __MSG_END__
+    // delimiter
+    snprintf(payload, sizeof(payload),
+             "{\"event\": \"%s\", \"pid\": %d}__MSG_END__", event_type,
+             getpid());
+    write(sock, payload, strlen(payload));
+  }
+  close(sock);
+}
 
 // Non-blocking telemetry dispatcher to Rust
 void send_telemetry_to_rust(const char *json_payload) {

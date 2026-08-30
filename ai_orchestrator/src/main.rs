@@ -344,7 +344,14 @@ async fn main() -> Result<(), anyhow::Error> {
                     )
                 }
             } else if is_deep_think {
-                let system_role = "You are Aish, a Deep Software Architect. Analyze this problem thoroughly. You have access to tools. If you need to read a file, output <tool_call>cat filename</tool_call>.";
+                let system_role = "You are Aish, an elite AI terminal agent. \
+                You have direct access to the user's filesystem. \
+                CRITICAL RULE: If the user asks about a file, a function, or code, DO NOT GUESS. \
+                You MUST execute a terminal command to find out. \
+                To execute a command, output exactly: <tool_call>command</tool_call>\n\
+                Example 1: <tool_call>grep -n \"lsh_split_pipe\" new.c</tool_call>\n\
+                Example 2: <tool_call>sed -n '10,20p' ai.c</tool_call>\n\
+                Stop talking and wait for the tool response immediately after issuing a tool call.";
                 let context_block = if !retrieved_context.is_empty() {
                     format!(
                         "\n\n[RETRIEVED LOCAL MEMORIES & KNOWN RULES]:\n{}",
@@ -355,7 +362,24 @@ async fn main() -> Result<(), anyhow::Error> {
                 };
                 format!("<|im_start|>system\n{}{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", system_role, context_block, raw_request)
             } else {
-                let system_role = "You are Aish, an elite CLI assistant. You can invoke terminal commands by wrapping them in <tool_call>command here</tool_call>. Wait for the system to inject the output.";
+                let system_role = "You are Aish, an elite AI terminal agent. \
+                You have direct access to the user's filesystem. \
+                CRITICAL RULES: \
+                1. If asked how code works, DO NOT GUESS. \
+                2. You MUST use multi-step reasoning. \
+                3. Before using a tool, you MUST explain your plan inside a <thought> block. \
+                4. NEVER use interactive commands like `less`, `more`, `vim`, or `nano`. \
+                5. Output the command inside a ```command codeblock. \n\
+                \n\
+                EXAMPLE FORMAT:\n\
+                <thought>\n\
+                I need to find where lsh_split_pipe is defined in new.c. I will use grep to get the line number first, then I will read the code.\n\
+                </thought>\n\
+                ```command\n\
+                grep -n \"lsh_split_pipe\" new.c\n\
+                ```\n\
+                \n\
+                Stop talking immediately after the codeblock and wait for the tool response.";
                 let context_block = if !retrieved_context.is_empty() {
                     format!(
                         "\n\n[RETRIEVED LOCAL MEMORIES & KNOWN RULES]:\n{}",
@@ -439,7 +463,7 @@ fn run_inference(
     }
 
     let mut n_cur = tokens.len() as i32;
-    let n_max = n_cur + 512;
+    let n_max = n_cur + 2048;
     let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
         llama_cpp_2::sampling::LlamaSampler::temp(0.7),
         llama_cpp_2::sampling::LlamaSampler::dist(1337),
@@ -473,4 +497,59 @@ fn run_inference(
         println!("  [Inference Warning] Model instantly returned EOG.");
         let _ = token_tx.blocking_send(" Hello! I'm here. How can I help you today?".to_string());
     }
+}
+
+fn run_inference_silent(
+    ctx: &mut llama_cpp_2::context::LlamaContext,
+    model: &LlamaModel,
+    prompt: &str,
+) -> String {
+    ctx.clear_kv_cache();
+    let mut tokens = match model.str_to_token(prompt, llama_cpp_2::model::AddBos::Never) {
+        Ok(t) => t,
+        Err(_) => return String::new(),
+    };
+
+    // Safety limit: Truncate to avoid overflowing the 4096 context window
+    if tokens.len() > 3800 {
+        tokens.truncate(3800);
+    }
+
+    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(4096, 1);
+    for (i, &token) in tokens.iter().enumerate() {
+        let is_last = i == tokens.len() - 1;
+        let _ = batch.add(token, i as i32, &[0], is_last);
+    }
+
+    if ctx.decode(&mut batch).is_err() {
+        return String::new();
+    }
+
+    let mut n_cur = tokens.len() as i32;
+    let n_max = n_cur + 250; // Keep the summary short and punchy!
+    let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
+        llama_cpp_2::sampling::LlamaSampler::temp(0.3), // Low temp for factual reading
+    ]);
+
+    let mut result = String::new();
+    while n_cur < n_max {
+        let new_token_id = sampler.sample(ctx, batch.n_tokens() - 1);
+        sampler.accept(new_token_id);
+        if model.is_eog_token(new_token_id) {
+            break;
+        }
+
+        #[allow(deprecated)]
+        if let Ok(piece) = model.token_to_str(new_token_id, llama_cpp_2::model::Special::Tokenize) {
+            result.push_str(&piece);
+        }
+
+        batch.clear();
+        let _ = batch.add(new_token_id, n_cur, &[0], true);
+        n_cur += 1;
+        if ctx.decode(&mut batch).is_err() {
+            break;
+        }
+    }
+    result
 }

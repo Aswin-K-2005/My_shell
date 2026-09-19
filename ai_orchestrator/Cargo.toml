@@ -17,3 +17,5 @@ arrow-schema = "53"
 futures = "0.3"
 uuid = { version = "1.7", features = ["v4", "fast-rng"] }
 lancedb = "0.14.1" # <-- ADD THIS LINE!
+rodio = "0.18.1"
+kokoro-micro = "1.0.1"

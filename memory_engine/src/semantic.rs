@@ -1,7 +1,8 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use std::sync::Mutex;
 
 pub struct SemanticMemory {
-    model: TextEmbedding,
+    model: Mutex<TextEmbedding>,
 }
 
 impl SemanticMemory {
@@ -11,13 +12,18 @@ impl SemanticMemory {
             InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
         )?;
 
-        Ok(Self { model })
+        Ok(Self {
+            model: Mutex::new(model),
+        })
     }
 
     /// Takes a shell command and turns it into a vector map
     pub fn generate_embedding(&self, text: &str) -> Result<Vec<f32>, anyhow::Error> {
         let documents = vec![text];
-        let mut embeddings = self.model.embed(documents, None)?;
+
+        // Lock the mutex to get exclusive mutable access to the internal buffers
+        let mut embeddings = self.model.lock().unwrap().embed(documents, None)?;
+
         let vector = embeddings.pop().expect("Failed to generate embedding");
         Ok(vector)
     }

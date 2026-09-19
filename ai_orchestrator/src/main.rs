@@ -1,3 +1,4 @@
+mod audio;
 mod consolidator;
 mod memory_manager;
 mod memory_types;
@@ -18,10 +19,20 @@ use memory_manager::MemoryManager;
 
 const CHAT_SOCKET_PATH: &str = "/tmp/aish_chat.sock";
 
+// The GBNF Grammar that physically blocks the LLM from using markdown for tools
+const TOOL_GRAMMAR: &str = r#"
+root ::= (normal-text | tool-call)*
+normal-text ::= [^@]+
+tool-call ::= "@@ " [a-zA-Z0-9_ \-\.\/]+ " @@"
+"#;
+
 #[derive(Debug)]
 enum RequestType {
-    FastFix(String),
-    StandardChat(String),
+    DualPass {
+        voice_prompt: String,
+        text_prompt: String,
+        use_fast_model_for_text: bool,
+    },
     DeepThink(String),
     ChatModeEnter(i32),
     ChatModeExit(i32),
@@ -34,20 +45,12 @@ struct InferenceTask {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // 1. HARDWARE LOCK: Force Vulkan to use the NVIDIA RTX 4070 Ti (Bypass Intel iGPU)
-    //
+    println!("  Booting Aish AI Orchestrator...");
 
-    // 2. DISABLE CPU FALLBACK: Tell Vulkan to use raw VRAM and never use the CPU
+    audio::init_audio_worker().await;
 
-    println!("  Booting aish AI Orchestrator (Daily Driver Mode)...");
-
-    // Initialize Memory Engine components
-    let semantic = Arc::new(SemanticMemory::new().expect("Failed to initialize FastEmbed"));
-    let lancedb = Arc::new(
-        VectorStore::new(".lancedb_data")
-            .await
-            .expect("Failed to open LanceDB"),
-    );
+    let semantic = Arc::new(SemanticMemory::new().expect("Failed to init FastEmbed"));
+    let lancedb = Arc::new(VectorStore::new(".lancedb_data").await.unwrap());
     let fjall = Arc::new(WorkingMemoryStore::new(".fjall_data_ipc")?);
 
     let memory_manager = Arc::new(MemoryManager::new(
@@ -55,17 +58,13 @@ async fn main() -> Result<(), anyhow::Error> {
         Arc::clone(&semantic),
     ));
 
-    // IPC Telemetry Server
     let fjall_ipc = Arc::clone(&fjall);
     let lancedb_ipc = Arc::clone(&lancedb);
     let semantic_ipc = Arc::clone(&semantic);
     tokio::spawn(async move {
-        if let Err(e) = ipc::start_ipc(fjall_ipc, lancedb_ipc, semantic_ipc).await {
-            println!("IPC Telemetry server error: {}", e);
-        }
+        let _ = ipc::start_ipc(fjall_ipc, lancedb_ipc, semantic_ipc).await;
     });
 
-    // Episodic Consolidator
     let fjall_consol = Arc::clone(&fjall);
     let lancedb_consol = Arc::clone(&lancedb);
     let semantic_consol = Arc::clone(&semantic);
@@ -73,9 +72,7 @@ async fn main() -> Result<(), anyhow::Error> {
         consolidator::start_consolidator(fjall_consol, lancedb_consol, semantic_consol).await;
     });
 
-    let backend = Arc::new(LlamaBackend::init().expect("Failed to initialize LlamaBackend"));
-
-    // Set up Absolute Paths dynamically
+    let backend = Arc::new(LlamaBackend::init().unwrap());
     let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let models_dir = format!("{}/coding/My_shell/models", home_dir);
 
@@ -95,108 +92,89 @@ async fn main() -> Result<(), anyhow::Error> {
     let (task_tx, mut task_rx) = mpsc::channel::<InferenceTask>(32);
     let backend_worker = Arc::clone(&backend);
 
-    // =========================================================================
-    //   STATEFUL VRAM MANAGER (WORKER THREAD)
-    // =========================================================================
     std::thread::spawn(move || {
         let mut active_chat_shells: HashSet<i32> = HashSet::new();
-
-        // VRAM Storage: ONLY store the Models! (Weights take 99% of the load time)
-        // Contexts (KV Caches) are created instantly on-demand, bypassing the Borrow Checker!
         let mut model_1_5b: Option<LlamaModel> = None;
         let mut model_7b: Option<LlamaModel> = None;
+        let mut model_14b: Option<LlamaModel> = None;
 
-        println!("  [VRAM] Pinning 1.5B Fast Model (~1.2GB) for instant Auto-Fixes...");
         if path_1_5b.exists() {
             let params = LlamaModelParams::default().with_n_gpu_layers(99);
             model_1_5b = LlamaModel::load_from_file(&backend_worker, &path_1_5b, &params).ok();
-        } else {
-            println!("  [File] 1.5B Model not found at {:?}", path_1_5b);
         }
 
         while let Some(task) = task_rx.blocking_recv() {
             match task.request {
                 RequestType::ChatModeEnter(pid) => {
                     active_chat_shells.insert(pid);
-                    println!(
-                        "  [State] PID {} entered Chat Mode. Active chats: {}",
-                        pid,
-                        active_chat_shells.len()
-                    );
-
-                    if model_7b.is_none() {
-                        println!("  [VRAM] Loading 7B Chat model into memory...");
-                        if path_7b.exists() {
-                            let params = LlamaModelParams::default().with_n_gpu_layers(99);
-                            model_7b =
-                                LlamaModel::load_from_file(&backend_worker, &path_7b, &params).ok();
-                        } else {
-                            println!("  [File] 7B missing at {:?}", path_7b);
-                        }
-                    }
-                }
-
-                RequestType::ChatModeExit(pid) => {
-                    active_chat_shells.remove(&pid);
-                    println!(
-                        "  [State] PID {} exited Chat Mode. Active chats: {}",
-                        pid,
-                        active_chat_shells.len()
-                    );
-
-                    if active_chat_shells.is_empty() && model_7b.is_some() {
-                        println!("  [VRAM] 0 active chats. Evicting 7B model. VRAM freed for OS.");
-                        model_7b = None;
-                    }
-                }
-
-                RequestType::FastFix(ref prompt) => {
-                    if let Some(m) = model_1_5b.as_ref() {
-                        let ctx_params = LlamaContextParams::default()
-                            .with_n_ctx(std::num::NonZeroU32::new(2048));
-                        if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
-                            run_inference(&mut c, m, prompt, &task.token_tx);
-                        }
-                    } else {
-                        let _ = task
-                            .token_tx
-                            .blocking_send(" [System Error: No Auto-Fix model]".to_string());
-                    }
-                }
-
-                RequestType::StandardChat(ref prompt) => {
                     if model_7b.is_none() && path_7b.exists() {
-                        println!("  [VRAM Warning] Lazy-loading 7B model (State Miss)...");
                         let params = LlamaModelParams::default().with_n_gpu_layers(99);
                         model_7b =
                             LlamaModel::load_from_file(&backend_worker, &path_7b, &params).ok();
                     }
+                }
+                RequestType::ChatModeExit(pid) => {
+                    active_chat_shells.remove(&pid);
+                    if active_chat_shells.is_empty() && model_7b.is_some() {
+                        model_7b = None;
+                    }
+                }
+                RequestType::DualPass {
+                    voice_prompt,
+                    text_prompt,
+                    use_fast_model_for_text,
+                } => {
+                    if model_14b.is_some() {
+                        model_14b = None;
+                    }
+                    if model_1_5b.is_none() && path_1_5b.exists() {
+                        let params = LlamaModelParams::default().with_n_gpu_layers(99);
+                        model_1_5b =
+                            LlamaModel::load_from_file(&backend_worker, &path_1_5b, &params).ok();
+                    }
 
-                    if let Some(m) = model_7b.as_ref() {
-                        let ctx_params = LlamaContextParams::default()
-                            .with_n_ctx(std::num::NonZeroU32::new(4096));
-                        if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
-                            run_inference(&mut c, m, prompt, &task.token_tx);
+                    if !voice_prompt.is_empty() {
+                        if let Some(m) = model_1_5b.as_ref() {
+                            let ctx_params = LlamaContextParams::default()
+                                .with_n_ctx(std::num::NonZeroU32::new(2048));
+                            if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
+                                let intro = run_inference_silent(&mut c, m, &voice_prompt, 50);
+                                if !intro.trim().is_empty() {
+                                    let _ = task
+                                        .token_tx
+                                        .blocking_send(format!("__SPOKEN_INTRO__ {}", intro));
+                                }
+                            }
                         }
-                    } else if let Some(m) = model_1_5b.as_ref() {
-                        println!("  [VRAM] 7B missing! Falling back to 1.5B.");
-                        let ctx_params = LlamaContextParams::default()
-                            .with_n_ctx(std::num::NonZeroU32::new(2048));
-                        if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
-                            run_inference(&mut c, m, prompt, &task.token_tx);
+                    }
+
+                    if use_fast_model_for_text {
+                        if let Some(m) = model_1_5b.as_ref() {
+                            let ctx_params = LlamaContextParams::default()
+                                .with_n_ctx(std::num::NonZeroU32::new(2048));
+                            if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
+                                run_inference(&mut c, m, &text_prompt, &task.token_tx);
+                            }
+                        }
+                    } else {
+                        if model_7b.is_none() && path_7b.exists() {
+                            let params = LlamaModelParams::default().with_n_gpu_layers(99);
+                            model_7b =
+                                LlamaModel::load_from_file(&backend_worker, &path_7b, &params).ok();
+                        }
+                        if let Some(m) = model_7b.as_ref() {
+                            let ctx_params = LlamaContextParams::default()
+                                .with_n_ctx(std::num::NonZeroU32::new(4096));
+                            if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
+                                run_inference(&mut c, m, &text_prompt, &task.token_tx);
+                            }
                         }
                     }
                 }
-
                 RequestType::DeepThink(ref prompt) => {
-                    println!(
-                        "  [VRAM] Deep Reasoning requested! Dropping SLMs to maximize space..."
-                    );
                     model_1_5b = None;
                     model_7b = None;
-
                     if path_14b.exists() {
-                        println!("  [VRAM] Loading 14B Model...");
                         let params = LlamaModelParams::default().with_n_gpu_layers(28);
                         if let Ok(m) =
                             LlamaModel::load_from_file(&backend_worker, &path_14b, &params)
@@ -207,40 +185,26 @@ async fn main() -> Result<(), anyhow::Error> {
                                 run_inference(&mut c, &m, prompt, &task.token_tx);
                             }
                         }
-                        println!("  [VRAM] Deep task complete. Unloading 14B model.");
                     }
-
-                    println!("  [VRAM] Recovering 1.5B Idle State...");
                     if path_1_5b.exists() {
                         let params = LlamaModelParams::default().with_n_gpu_layers(99);
                         model_1_5b =
                             LlamaModel::load_from_file(&backend_worker, &path_1_5b, &params).ok();
                     }
-
-                    if !active_chat_shells.is_empty() {
-                        println!("  [VRAM] Recovering 7B Chat State...");
-                        if path_7b.exists() {
-                            let params = LlamaModelParams::default().with_n_gpu_layers(99);
-                            model_7b =
-                                LlamaModel::load_from_file(&backend_worker, &path_7b, &params).ok();
-                        }
+                    if !active_chat_shells.is_empty() && path_7b.exists() {
+                        let params = LlamaModelParams::default().with_n_gpu_layers(99);
+                        model_7b =
+                            LlamaModel::load_from_file(&backend_worker, &path_7b, &params).ok();
                     }
                 }
             }
         }
     });
 
-    // =========================================================================
-    //   UNIX CHAT SOCKET SERVER & TRIAGE ROUTER
-    // =========================================================================
     if std::path::Path::new(CHAT_SOCKET_PATH).exists() {
         std::fs::remove_file(CHAT_SOCKET_PATH)?;
     }
     let listener = UnixListener::bind(CHAT_SOCKET_PATH)?;
-    println!(
-        "  Unix Chat Socket Server listening on {}",
-        CHAT_SOCKET_PATH
-    );
 
     loop {
         let (mut stream, _) = listener.accept().await?;
@@ -264,16 +228,20 @@ async fn main() -> Result<(), anyhow::Error> {
                 .trim_end_matches("__MSG_END__")
                 .trim()
                 .to_string();
-
             if raw_request.is_empty() {
                 return;
             }
 
-            // 1. Intercept JSON State Triggers
+            let is_state_event = raw_request.contains("\"event\": \"entered_chat\"")
+                || raw_request.contains("\"event\": \"exited_chat\"");
+            if !is_state_event {
+                audio::stop_speaking();
+            }
+
             if raw_request.contains("\"event\": \"entered_chat\"") {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw_request) {
                     if let Some(pid) = json["pid"].as_i64() {
-                        let (token_tx, _) = mpsc::channel(1); // Dummy channel
+                        let (token_tx, _) = mpsc::channel(1);
                         let _ = task_tx
                             .send(InferenceTask {
                                 request: RequestType::ChatModeEnter(pid as i32),
@@ -284,7 +252,6 @@ async fn main() -> Result<(), anyhow::Error> {
                     }
                 }
             }
-
             if raw_request.contains("\"event\": \"exited_chat\"") {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw_request) {
                     if let Some(pid) = json["pid"].as_i64() {
@@ -300,26 +267,36 @@ async fn main() -> Result<(), anyhow::Error> {
                 }
             }
 
-            // 2. Standard Routing
             let current_project_path = std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "/home/aswinkss/coding/My_shell".to_string());
-
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let is_auto_fix = raw_request.contains("The user typed the command:");
-            let is_deep_think =
-                raw_request.to_lowercase().starts_with("think:") || raw_request.contains("--deep");
+
+            let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            let profile_path = format!("{}/.aish_profile.md", home_dir);
+            let user_profile = std::fs::read_to_string(&profile_path).unwrap_or_default();
+
+            let mut context_block = if !user_profile.is_empty() {
+                format!("\n\n[CRITICAL: USER IDENTITY PROFILE]\n{}\n", user_profile)
+            } else {
+                String::new()
+            };
+
+            if let Ok(entries) = std::fs::read_dir(std::env::current_dir().unwrap_or_default()) {
+                let mut files = String::new();
+                for entry in entries.flatten() {
+                    files.push_str(&format!("- {}\n", entry.file_name().to_string_lossy()));
+                }
+                context_block.push_str(&format!("\n[FILES IN CURRENT DIRECTORY]:\n{}\n", files));
+            }
 
             let search_query = if is_auto_fix {
-                let extracted_cmd = raw_request
+                raw_request
                     .lines()
                     .find(|line| line.contains("The user typed the command:"))
-                    .map(|line| {
-                        line.replace("The user typed the command:", "")
-                            .trim()
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| raw_request.clone());
-                format!("what is the fix for the command {}", extracted_cmd)
+                    .unwrap_or(&raw_request)
+                    .to_string()
             } else {
                 raw_request.clone()
             };
@@ -328,112 +305,144 @@ async fn main() -> Result<(), anyhow::Error> {
                 .retrieve_and_compress_context(&search_query, &current_project_path)
                 .await
                 .unwrap_or_default();
-
-            let mega_prompt = if is_auto_fix {
-                if !retrieved_context.is_empty() {
-                    let system_role = "You are a strict CLI auto-fix assistant. A verified fix for this exact command was retrieved from memory. Output the exact fix from the memory.";
-                    format!(
-                        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n[VERIFIED MEMORY FIX]:\n{}\n\nCURRENT FAILED COMMAND:\n{}<|im_end|>\n<|im_start|>assistant\nHere is the verified fix:\n```sh\n",
-                        system_role, retrieved_context, raw_request
-                    )
-                } else {
-                    let system_role = "You are an expert Linux CLI auto-fix assistant. Analyze the failed command and error message. IGNORE shell prefixes like 'lsh:' or 'bash:'. Provide a brief explanation and the fix command inside a ```sh codeblock.";
-                    format!(
-                        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\nCURRENT FAILED COMMAND TO FIX:\n{}<|im_end|>\n<|im_start|>assistant\n",
-                        system_role, raw_request
-                    )
-                }
-            } else if is_deep_think {
-                let system_role = "You are Aish, an elite AI terminal agent. \
-                You have direct access to the user's filesystem. \
-                CRITICAL RULE: If the user asks about a file, a function, or code, DO NOT GUESS. \
-                You MUST execute a terminal command to find out. \
-                To execute a command, output exactly: <tool_call>command</tool_call>\n\
-                Example 1: <tool_call>grep -n \"lsh_split_pipe\" new.c</tool_call>\n\
-                Example 2: <tool_call>sed -n '10,20p' ai.c</tool_call>\n\
-                Stop talking and wait for the tool response immediately after issuing a tool call.";
-                let context_block = if !retrieved_context.is_empty() {
-                    format!(
-                        "\n\n[RETRIEVED LOCAL MEMORIES & KNOWN RULES]:\n{}",
-                        retrieved_context
-                    )
-                } else {
-                    String::new()
-                };
-                format!("<|im_start|>system\n{}{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", system_role, context_block, raw_request)
-            } else {
-                let system_role = "You are Aish, an elite AI terminal agent. \
-                You have direct access to the user's filesystem. \
-                CRITICAL RULES: \
-                1. If asked how code works, DO NOT GUESS. \
-                2. You MUST use multi-step reasoning. \
-                3. Before using a tool, you MUST explain your plan inside a <thought> block. \
-                4. NEVER use interactive commands like `less`, `more`, `vim`, or `nano`. \
-                5. Output the command inside a ```command codeblock. \n\
-                \n\
-                EXAMPLE FORMAT:\n\
-                <thought>\n\
-                I need to find where lsh_split_pipe is defined in new.c. I will use grep to get the line number first, then I will read the code.\n\
-                </thought>\n\
-                ```command\n\
-                grep -n \"lsh_split_pipe\" new.c\n\
-                ```\n\
-                \n\
-                Stop talking immediately after the codeblock and wait for the tool response.";
-                let context_block = if !retrieved_context.is_empty() {
-                    format!(
-                        "\n\n[RETRIEVED LOCAL MEMORIES & KNOWN RULES]:\n{}",
-                        retrieved_context
-                    )
-                } else {
-                    String::new()
-                };
-                format!("<|im_start|>system\n{}{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", system_role, context_block, raw_request)
-            };
-
-            let request_enum = if is_auto_fix {
-                RequestType::FastFix(mega_prompt)
-            } else if is_deep_think {
-                RequestType::DeepThink(mega_prompt)
-            } else {
-                RequestType::StandardChat(mega_prompt)
-            };
-
-            let (token_tx, mut token_rx) = mpsc::channel::<String>(32);
-            let task = InferenceTask {
-                request: request_enum,
-                token_tx,
-            };
-
-            let mut full_response = String::new();
-            if task_tx.send(task).await.is_ok() {
-                while let Some(chunk) = token_rx.recv().await {
-                    let _ = stream.write_all(chunk.as_bytes()).await;
-                    full_response.push_str(&chunk);
-                }
-                let _ = stream.write_all(b"__END__").await;
-                let _ = stream.flush().await;
+            if !retrieved_context.is_empty() {
+                context_block.push_str(&format!(
+                    "\n[RETRIEVED LOCAL MEMORIES & KNOWN RULES]:\n{}\n",
+                    retrieved_context
+                ));
             }
 
-            if is_auto_fix {
-                if let Some(code) = extract_code_block(&full_response) {
-                    println!("  [Orchestrator] Captured AI Suggested Fix: '{}'", code);
+            let voice_sys = if is_auto_fix {
+                "You are Aish. The user's command failed. Write EXACTLY ONE short, joyful, conversational spoken sentence reacting with good humor. DO NOT output markdown.".to_string()
+            } else {
+                format!(
+                    "You are the joyful voice of Aish. The user just asked: '{}' \
+                Write EXACTLY ONE enthusiastic, spoken sentence reacting to this. \
+                1. Vary your opening (e.g., 'Aha!', 'Oh awesome,', 'Sweet!'). \
+                2. Keep it to ONE casual sentence.",
+                    raw_request
+                )
+            };
+
+            let text_sys = if is_auto_fix {
+                format!("You are a strict CLI auto-fix assistant. Output the exact fix inside a ```sh block.\n{}", context_block)
+            } else {
+                format!("You are Aish, an elite AI terminal assistant. \
+                CRITICAL INSTRUCTIONS: \
+                1. If you need to inspect a file (e.g., new.c), YOU MUST autonomously run the command using this exact format: @@ cat new.c @@ \
+                2. NEVER tell the user to run the command. You must use the @@ format to run it yourself. \
+                3. DO NOT output markdown code blocks for tools. \
+                4. Stop generating text immediately after the closing @@.\n{}", context_block)
+            };
+
+            let mut current_voice_prompt = format!("<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", voice_sys, raw_request);
+            let mut current_text_prompt = format!("<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", text_sys, raw_request);
+
+            loop {
+                let (token_tx, mut token_rx) = mpsc::channel::<String>(32);
+                let task = InferenceTask {
+                    request: RequestType::DualPass {
+                        voice_prompt: current_voice_prompt.clone(),
+                        text_prompt: current_text_prompt.clone(),
+                        use_fast_model_for_text: is_auto_fix,
+                    },
+                    token_tx,
+                };
+
+                current_voice_prompt = String::new();
+
+                if task_tx.send(task).await.is_ok() {
+                    let mut tool_buffer = String::new();
+                    let mut capturing_tool = false;
+                    let mut tool_executed = false;
+                    let mut tool_result = String::new();
+
+                    while let Some(chunk) = token_rx.recv().await {
+                        if chunk.contains("__SPOKEN_INTRO__") {
+                            let intro = chunk.replace("__SPOKEN_INTRO__", "").trim().to_string();
+                            let clean_intro = prepare_speech_text(&intro);
+
+                            if !clean_intro.is_empty() {
+                                audio::speak_stream(clean_intro.clone());
+                                let _ = stream.write_all(b"__SPEAKING__").await;
+                                let _ = stream.flush().await;
+                                let delay_ms = clean_intro.len() as u64 * 65;
+                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
+                                    .await;
+                            }
+                            continue;
+                        }
+
+                        if chunk.contains("@@") && !capturing_tool {
+                            capturing_tool = true;
+                            let split_idx = chunk.find("@@").unwrap();
+
+                            if split_idx > 0 {
+                                let _ = stream.write_all(chunk[..split_idx].as_bytes()).await;
+                            }
+
+                            tool_buffer.push_str(&chunk[split_idx..]);
+                        } else if capturing_tool {
+                            tool_buffer.push_str(&chunk);
+                        }
+
+                        if capturing_tool {
+                            if tool_buffer.len() > 2 && tool_buffer[2..].contains("@@") {
+                                if let Some(end_offset) = tool_buffer[2..].find("@@") {
+                                    let tool_cmd =
+                                        tool_buffer[2..end_offset + 2].trim().to_string();
+
+                                    let blocked =
+                                        ["curl ", "wget ", "rm ", "sudo ", "apt ", ">", "chmod "]
+                                            .iter()
+                                            .any(|&k| tool_cmd.contains(k));
+
+                                    if !blocked && !tool_cmd.is_empty() {
+                                        if let Ok(output) = std::process::Command::new("sh")
+                                            .arg("-c")
+                                            .arg(&tool_cmd)
+                                            .current_dir(&current_project_path)
+                                            .output()
+                                        {
+                                            tool_result =
+                                                String::from_utf8_lossy(&output.stdout).to_string();
+                                            if tool_result.is_empty() {
+                                                tool_result =
+                                                    String::from_utf8_lossy(&output.stderr)
+                                                        .to_string();
+                                            }
+                                            tool_executed = true;
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                            continue;
+                        }
+
+                        let _ = stream.write_all(chunk.as_bytes()).await;
+                    }
+
+                    if tool_executed {
+                        current_text_prompt.push_str(&format!("\n<system_output>\n{}\n</system_output>\nNow, summarize this output for the user directly.", tool_result));
+                        continue;
+                    }
+
+                    let _ = stream.write_all(b"__END__").await;
+                    let _ = stream.flush().await;
+                    break;
                 }
             }
         });
     }
 }
 
-fn extract_code_block(text: &str) -> Option<String> {
-    if let Some(start) = text.find("```") {
-        let after_start = &text[start + 3..];
-        let code_start = after_start.find('\n').map(|i| i + 1).unwrap_or(0);
-        let code_body = &after_start[code_start..];
-        if let Some(end) = code_body.find("```") {
-            return Some(code_body[..end].trim().to_string());
-        }
-    }
-    None
+fn prepare_speech_text(text: &str) -> String {
+    text.replace("`", "")
+        .replace("*sigh*", "huuuuh")
+        .replace("*laughs*", "haha")
+        .trim()
+        .to_string()
 }
 
 fn run_inference(
@@ -443,35 +452,39 @@ fn run_inference(
     token_tx: &mpsc::Sender<String>,
 ) {
     ctx.clear_kv_cache();
-    let tokens = match model.str_to_token(prompt, llama_cpp_2::model::AddBos::Never) {
-        Ok(t) => t,
-        Err(e) => {
-            println!("  [Inference Error] Tokenization failed: {}", e);
-            return;
-        }
-    };
+    let mut tokens = model
+        .str_to_token(prompt, llama_cpp_2::model::AddBos::Never)
+        .unwrap_or_default();
+    if tokens.is_empty() {
+        return;
+    }
+    if tokens.len() > 1900 {
+        tokens.truncate(1900);
+    }
 
     let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(2048, 1);
     for (i, &token) in tokens.iter().enumerate() {
-        let is_last = i == tokens.len() - 1;
-        let _ = batch.add(token, i as i32, &[0], is_last);
+        let _ = batch.add(token, i as i32, &[0], i == tokens.len() - 1);
     }
-
-    if let Err(e) = ctx.decode(&mut batch) {
-        println!("  [Inference Error] VRAM Decode failed: {}", e);
+    if ctx.decode(&mut batch).is_err() {
         return;
     }
 
     let mut n_cur = tokens.len() as i32;
     let n_max = n_cur + 2048;
+
+    // Initialize the grammar as a direct pluggable sampler using the model's vocabulary
+    let grammar_sampler = llama_cpp_2::sampling::LlamaSampler::grammar(model, TOOL_GRAMMAR, "root")
+        .expect("Failed to initialize grammar sampler");
+
     let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
-        llama_cpp_2::sampling::LlamaSampler::temp(0.7),
+        llama_cpp_2::sampling::LlamaSampler::temp(0.4),
+        grammar_sampler,
         llama_cpp_2::sampling::LlamaSampler::dist(1337),
     ]);
 
-    let mut generated_something = false;
     while n_cur < n_max {
-        let new_token_id = sampler.sample(ctx, batch.n_tokens() - 1);
+        let new_token_id = sampler.sample(ctx, -1);
         sampler.accept(new_token_id);
         if model.is_eog_token(new_token_id) {
             break;
@@ -482,9 +495,7 @@ fn run_inference(
             if token_tx.blocking_send(piece).is_err() {
                 break;
             }
-            generated_something = true;
         }
-
         batch.clear();
         let _ = batch.add(new_token_id, n_cur, &[0], true);
         n_cur += 1;
@@ -492,48 +503,44 @@ fn run_inference(
             break;
         }
     }
-
-    if !generated_something {
-        println!("  [Inference Warning] Model instantly returned EOG.");
-        let _ = token_tx.blocking_send(" Hello! I'm here. How can I help you today?".to_string());
-    }
 }
 
 fn run_inference_silent(
     ctx: &mut llama_cpp_2::context::LlamaContext,
     model: &LlamaModel,
     prompt: &str,
+    max_tokens: i32,
 ) -> String {
     ctx.clear_kv_cache();
-    let mut tokens = match model.str_to_token(prompt, llama_cpp_2::model::AddBos::Never) {
-        Ok(t) => t,
-        Err(_) => return String::new(),
-    };
-
-    // Safety limit: Truncate to avoid overflowing the 4096 context window
-    if tokens.len() > 3800 {
-        tokens.truncate(3800);
+    let mut tokens = model
+        .str_to_token(prompt, llama_cpp_2::model::AddBos::Never)
+        .unwrap_or_default();
+    if tokens.is_empty() {
+        return String::new();
+    }
+    if tokens.len() > 1800 {
+        tokens.truncate(1800);
     }
 
-    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(4096, 1);
+    let mut batch = llama_cpp_2::llama_batch::LlamaBatch::new(2048, 1);
     for (i, &token) in tokens.iter().enumerate() {
-        let is_last = i == tokens.len() - 1;
-        let _ = batch.add(token, i as i32, &[0], is_last);
+        let _ = batch.add(token, i as i32, &[0], i == tokens.len() - 1);
     }
-
     if ctx.decode(&mut batch).is_err() {
         return String::new();
     }
 
     let mut n_cur = tokens.len() as i32;
-    let n_max = n_cur + 250; // Keep the summary short and punchy!
+    let n_max = n_cur + max_tokens;
+
     let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
-        llama_cpp_2::sampling::LlamaSampler::temp(0.3), // Low temp for factual reading
+        llama_cpp_2::sampling::LlamaSampler::temp(0.4),
+        llama_cpp_2::sampling::LlamaSampler::dist(1337),
     ]);
 
     let mut result = String::new();
     while n_cur < n_max {
-        let new_token_id = sampler.sample(ctx, batch.n_tokens() - 1);
+        let new_token_id = sampler.sample(ctx, -1);
         sampler.accept(new_token_id);
         if model.is_eog_token(new_token_id) {
             break;
@@ -543,7 +550,6 @@ fn run_inference_silent(
         if let Ok(piece) = model.token_to_str(new_token_id, llama_cpp_2::model::Special::Tokenize) {
             result.push_str(&piece);
         }
-
         batch.clear();
         let _ = batch.add(new_token_id, n_cur, &[0], true);
         n_cur += 1;

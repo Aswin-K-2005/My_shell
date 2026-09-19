@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "memory_engine",
     "ai_orchestrator",
+    "memory_engine",
+    "aish_widget",
     "shared_types"
 ]
-resolver = "2"

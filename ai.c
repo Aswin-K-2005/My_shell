@@ -8,6 +8,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+char ai_suggested_fix[1024] = "";
+
 // Helper: Escape special JSON characters
 void json_escape(const char *src, char *dest, size_t dest_size) {
   size_t j = 0;
@@ -208,23 +210,114 @@ void ask_ai(const char *command, const char *error) {
   write(sock, message, strlen(message));
   write(sock, "__MSG_END__", 11);
 
-  char buf[512];
-  int n;
+  // Accumulate the whole reply so control tags split across reads are still
+  // caught, and print everything except a short tail that might be half a tag.
+  static char resp[16384];
+  size_t len = 0, printed = 0;
+  const size_t hold_back = 11; // strlen("__SPEAKING__") - 1
+  int done = 0;
+  resp[0] = '\0';
+
   printf("\033[33m[aish AI Auto-Fix]: \033[0m\n");
   fflush(stdout);
 
-  while ((n = recv(sock, buf, sizeof(buf) - 1, 0)) > 0) {
-    buf[n] = '\0';
-    char *end_pos = strstr(buf, "__END__");
-    if (end_pos != NULL) {
-      *end_pos = '\0';
-      printf("%s", buf);
-      fflush(stdout);
+  while (!done && len < sizeof(resp) - 1) {
+    int n = recv(sock, resp + len, sizeof(resp) - 1 - len, 0);
+    if (n <= 0)
       break;
+    len += n;
+    resp[len] = '\0';
+
+    char *tag;
+    while ((tag = strstr(resp + printed, "__SPEAKING__")) != NULL) {
+      memmove(tag, tag + 12, strlen(tag + 12) + 1);
+      len -= 12;
     }
-    printf("%s", buf);
+
+    size_t printable = len > printed + hold_back ? len - hold_back : printed;
+    char *end_pos = strstr(resp, "__END__");
+    if (end_pos) {
+      *end_pos = '\0';
+      len = end_pos - resp;
+      printable = len;
+      done = 1;
+    }
+    if (printable > printed) {
+      fwrite(resp + printed, 1, printable - printed, stdout);
+      fflush(stdout);
+      printed = printable;
+    }
+  }
+  if (len > printed)
+    fwrite(resp + printed, 1, len - printed, stdout);
+  printf("\n");
+  close(sock);
+
+  extract_fix_command(resp, command, ai_suggested_fix, sizeof(ai_suggested_fix));
+  if (ai_suggested_fix[0] != '\0') {
+    printf("\033[2m  ↳ fix ready at your prompt, press Tab to use it\033[0m\n");
     fflush(stdout);
   }
-  printf("\n");
+}
+
+// Pull the first runnable line out of the first ``` block in the reply.
+void extract_fix_command(const char *reply, const char *failed_command,
+                         char *out, size_t out_size) {
+  out[0] = '\0';
+  const char *fence = strstr(reply, "```");
+  if (!fence)
+    return;
+  const char *line = strchr(fence, '\n'); // skip the ```sh language tag
+  while (line && *line) {
+    line++;
+    const char *eol = strchr(line, '\n');
+    size_t line_len = eol ? (size_t)(eol - line) : strlen(line);
+    while (line_len > 0 && (*line == ' ' || *line == '\t')) {
+      line++;
+      line_len--;
+    }
+    if (line_len >= 3 && strncmp(line, "```", 3) == 0)
+      return;
+    if (line_len >= 2 && line[0] == '$' && line[1] == ' ') {
+      line += 2;
+      line_len -= 2;
+    }
+    while (line_len > 0 && (line[line_len - 1] == ' ' || line[line_len - 1] == '\r'))
+      line_len--;
+    if (line_len > 0 && line[0] != '#') {
+      if (line_len >= out_size)
+        return;
+      memcpy(out, line, line_len);
+      out[line_len] = '\0';
+      // Suggesting the exact command that just failed isn't a fix.
+      if (strcmp(out, failed_command) == 0)
+        out[0] = '\0';
+      return;
+    }
+    line = eol;
+  }
+}
+
+// Proactive heads-up: a long-running command finished, so the orchestrator
+// can say so out loud in case the user has looked away.
+void notify_command_finished(const char *command, int exit_code,
+                             double seconds) {
+  int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (sock < 0)
+    return;
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, "/tmp/aish_chat.sock", sizeof(addr.sun_path) - 1);
+  if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+    char escaped[2048];
+    json_escape(command, escaped, sizeof(escaped));
+    char payload[4096];
+    snprintf(payload, sizeof(payload),
+             "{\"event\": \"command_finished\", \"command\": \"%s\", "
+             "\"exit_code\": %d, \"seconds\": %d}__MSG_END__",
+             escaped, exit_code, (int)seconds);
+    write(sock, payload, strlen(payload));
+  }
   close(sock);
 }

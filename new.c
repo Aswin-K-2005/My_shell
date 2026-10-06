@@ -1,5 +1,6 @@
 #include "ai.h"
 #include "compress.h"
+#include "proactive.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -114,6 +115,10 @@ typedef struct {
 CommandFreq freq_table[1000];
 int freq_count = 0;
 int last_exit_status = 0;
+// Set when the AI auto-fix ran for the current command line.
+int ai_fix_triggered = 0;
+// The last command run in shell mode, used to predict the next one.
+char last_command_line[256] = "";
 
 int compare_freq(const void *a, const void *b) {
   char *cmd_a = *(char **)a;
@@ -586,6 +591,7 @@ int lsh_launch(char **args) {
           if (args[i + 1] != NULL)
             strcat(full_command, " ");
         }
+        ai_fix_triggered = 1;
         ask_ai(full_command, error_buf);
       }
       close(stderr_pipe[0]);
@@ -825,6 +831,13 @@ char *lsh_read_line_raw(TrieNode *root, double elapsed) {
   ghost[0] = '\0';
 
   print_prompt(elapsed);
+  if (shell_mode == 0) {
+    proactive_suggestion(last_command_line, ghost, sizeof(ghost));
+    if (ghost[0] != '\0') {
+      printf("\033[2m%s\033[0m\033[%dD", ghost, (int)strlen(ghost));
+      fflush(stdout);
+    }
+  }
   while (1) {
     if (flag) {
       printf("\r\033[K[done] background job finished\n");
@@ -883,6 +896,7 @@ char *lsh_read_line_raw(TrieNode *root, double elapsed) {
       seq[1] = getchar();
       if (seq[0] == '[') {
         if (seq[1] == 'A') {
+          ghost[0] = '\0';
           if (history_index > 0) {
             if (history_index == history_count)
               strncpy(saved_buffer, buffer, bufsize);
@@ -896,6 +910,7 @@ char *lsh_read_line_raw(TrieNode *root, double elapsed) {
             fflush(stdout);
           }
         } else if (seq[1] == 'B') {
+          ghost[0] = '\0';
           if (history_index < history_count) {
             history_index++;
             if (history_index == history_count)
@@ -1068,6 +1083,36 @@ char **lsh_split_line(char *line) {
   return tokens;
 }
 
+// Proactive bookkeeping after each shell-mode command: learn habits and give a
+// spoken heads-up when something slow finishes.
+void after_command(const char *line, double elapsed) {
+  char cmd[256];
+  strncpy(cmd, line, sizeof(cmd) - 1);
+  cmd[sizeof(cmd) - 1] = '\0';
+  size_t len = strlen(cmd);
+  while (len > 0 && (cmd[len - 1] == ' ' || cmd[len - 1] == '\t'))
+    cmd[--len] = '\0';
+  char *start = cmd;
+  while (*start == ' ' || *start == '\t')
+    start++;
+  if (*start == '\0')
+    return;
+
+  // Only learn from commands that worked; suggesting a failure helps nobody.
+  if (last_exit_status == 0 && !ai_fix_triggered)
+    record_transition(last_command_line, start);
+
+  // The auto-fix already speaks up about failures, so don't talk over it.
+  if (!ai_fix_triggered && should_announce(start, elapsed)) {
+    printf("\a");
+    fflush(stdout);
+    notify_command_finished(start, last_exit_status, elapsed);
+  }
+
+  strncpy(last_command_line, start, sizeof(last_command_line) - 1);
+  last_command_line[sizeof(last_command_line) - 1] = '\0';
+}
+
 void lsh_loop(TrieNode *root) {
   char *line, **args;
   int status;
@@ -1082,11 +1127,16 @@ void lsh_loop(TrieNode *root) {
       history_count++;
     }
     args = lsh_split_line(line);
+    int mode_before = shell_mode;
+    ai_fix_triggered = 0;
+    last_exit_status = 0;
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
     status = lsh_execute(args);
     clock_gettime(CLOCK_MONOTONIC, &end);
     elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    if (mode_before == 0)
+      after_command(line, elapsed);
     free(line);
     for (int i = 0; args[i] != NULL; i++)
       free(args[i]);
@@ -1099,6 +1149,8 @@ int main(int argc, char **argv) {
   (void)argv;
   load_freq();
   atexit(save_freq);
+  load_transitions();
+  atexit(save_transitions);
   start_ai_orchestrator();
   TrieNode *root = trie_new_node();
   load_commands(root);

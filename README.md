@@ -36,6 +36,13 @@ It has since evolved into a **Cognitive AI Terminal**. Instead of relying on clo
 - [x] **Semantic RAG memory** — uses `FastEmbed` and `LanceDB` to vector-search past shell errors and learn custom fixes over time
 - [x] **Short-term context** — uses `Fjall` for ultra-fast IPC state tracking
 - [x] **Cognitive routing** — Rust natively calculates heuristics to determine whether to provide an instant fix or trigger deep reasoning
+- [x] **Natural voice** — Kokoro TTS (`af_heart` by default, override with `AISH_VOICE`) speaks phrase by phrase with natural pauses, varied pacing, and a calm persona that doesn't repeat itself
+- [x] **Short chat memory** — the last few chat exchanges are kept so follow-up questions make sense
+
+### ⚡ Proactive Shell
+- [x] **One-key fixes** — when a command fails, the AI's suggested fix waits as ghost text at your next prompt; press Tab to take it
+- [x] **Learned next command** — aish learns your habits (`git add .` → `git commit`) and offers the usual next step at an empty prompt (`~/.config/aish/transitions.tsv`)
+- [x] **Long-command heads-up** — commands that take longer than 15s ring the bell and Aish tells you out loud when they finish (`AISH_NOTIFY_SECS`, `0` turns it off)
 - [ ] **Agentic tool use** *(WIP)* — ReAct loop allowing the LLM to execute `grep`, `cat`, and file searches directly in the shell
 
 ---
@@ -129,8 +136,10 @@ make
 ```
 My_shell/
 ├── ai.c / ai.h           # C Shell: AI Unix socket communication
+├── proactive.c / .h      # C Shell: learned next-command hints & finish notices
 ├── new.c                 # C Shell: POSIX process & input management
 ├── ai_orchestrator/      # Rust: Tokio async server & llama.cpp bindings
+│   └── src/voice.rs      #   Persona, speech cleanup and pacing for the voice
 ├── memory_engine/        # Rust: FastEmbed, LanceDB, and Fjall IPC
 ├── shared_types/         # Rust: Shared data structures across workspaces
 ├── models/               # Local GGUF weights (git-ignored)

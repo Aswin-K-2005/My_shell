@@ -2,14 +2,15 @@ mod audio;
 mod consolidator;
 mod memory_manager;
 mod memory_types;
+mod voice;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
@@ -18,6 +19,11 @@ use memory_engine::{ipc, SemanticMemory, VectorStore, WorkingMemoryStore};
 use memory_manager::MemoryManager;
 
 const CHAT_SOCKET_PATH: &str = "/tmp/aish_chat.sock";
+
+// The last few chat exchanges, so follow-ups like "and the other file?" make sense.
+static CHAT_HISTORY: Mutex<VecDeque<(String, String)>> = Mutex::new(VecDeque::new());
+const CHAT_HISTORY_TURNS: usize = 3;
+const CHAT_HISTORY_CHARS: usize = 600;
 
 // The GBNF Grammar that physically blocks the LLM from using markdown for tools
 const TOOL_GRAMMAR: &str = r#"
@@ -138,7 +144,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             let ctx_params = LlamaContextParams::default()
                                 .with_n_ctx(std::num::NonZeroU32::new(2048));
                             if let Ok(mut c) = m.new_context(&backend_worker, ctx_params) {
-                                let intro = run_inference_silent(&mut c, m, &voice_prompt, 50);
+                                let intro = run_inference_silent(&mut c, m, &voice_prompt, 60);
                                 if !intro.trim().is_empty() {
                                     let _ = task
                                         .token_tx
@@ -233,7 +239,8 @@ async fn main() -> Result<(), anyhow::Error> {
             }
 
             let is_state_event = raw_request.contains("\"event\": \"entered_chat\"")
-                || raw_request.contains("\"event\": \"exited_chat\"");
+                || raw_request.contains("\"event\": \"exited_chat\"")
+                || raw_request.contains("\"event\": \"command_finished\"");
             if !is_state_event {
                 audio::stop_speaking();
             }
@@ -251,6 +258,16 @@ async fn main() -> Result<(), anyhow::Error> {
                         return;
                     }
                 }
+            }
+            // Proactive notice from the shell: a long-running command just finished.
+            if raw_request.contains("\"event\": \"command_finished\"") {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw_request) {
+                    let command = json["command"].as_str().unwrap_or_default();
+                    let exit_code = json["exit_code"].as_i64().unwrap_or(0) as i32;
+                    let seconds = json["seconds"].as_u64().unwrap_or(0);
+                    audio::speak_stream(voice::command_finished_line(command, exit_code, seconds));
+                }
+                return;
             }
             if raw_request.contains("\"event\": \"exited_chat\"") {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw_request) {
@@ -313,15 +330,9 @@ async fn main() -> Result<(), anyhow::Error> {
             }
 
             let voice_sys = if is_auto_fix {
-                "You are Aish. The user's command failed. Write EXACTLY ONE short, joyful, conversational spoken sentence reacting with good humor. DO NOT output markdown.".to_string()
+                voice::voice_system_prompt(voice::Mood::Failure, &raw_request)
             } else {
-                format!(
-                    "You are the joyful voice of Aish. The user just asked: '{}' \
-                Write EXACTLY ONE enthusiastic, spoken sentence reacting to this. \
-                1. Vary your opening (e.g., 'Aha!', 'Oh awesome,', 'Sweet!'). \
-                2. Keep it to ONE casual sentence.",
-                    raw_request
-                )
+                voice::voice_system_prompt(voice::Mood::Chat, &raw_request)
             };
 
             let text_sys = if is_auto_fix {
@@ -336,7 +347,13 @@ async fn main() -> Result<(), anyhow::Error> {
             };
 
             let mut current_voice_prompt = format!("<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", voice_sys, raw_request);
-            let mut current_text_prompt = format!("<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", text_sys, raw_request);
+            let history_turns = if is_auto_fix {
+                String::new()
+            } else {
+                chat_history_prompt()
+            };
+            let mut current_text_prompt = format!("<|im_start|>system\n{}<|im_end|>\n{}<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", text_sys, history_turns, raw_request);
+            let mut full_answer = String::new();
 
             loop {
                 let (token_tx, mut token_rx) = mpsc::channel::<String>(32);
@@ -359,16 +376,14 @@ async fn main() -> Result<(), anyhow::Error> {
 
                     while let Some(chunk) = token_rx.recv().await {
                         if chunk.contains("__SPOKEN_INTRO__") {
-                            let intro = chunk.replace("__SPOKEN_INTRO__", "").trim().to_string();
-                            let clean_intro = prepare_speech_text(&intro);
+                            let intro = chunk.replace("__SPOKEN_INTRO__", "");
+                            let clean_intro = voice::tidy_spoken_line(&intro);
 
+                            // Speech plays alongside the streamed text; no artificial stall.
                             if !clean_intro.is_empty() {
-                                audio::speak_stream(clean_intro.clone());
+                                audio::speak_stream(clean_intro);
                                 let _ = stream.write_all(b"__SPEAKING__").await;
                                 let _ = stream.flush().await;
-                                let delay_ms = clean_intro.len() as u64 * 65;
-                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms))
-                                    .await;
                             }
                             continue;
                         }
@@ -378,6 +393,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             let split_idx = chunk.find("@@").unwrap();
 
                             if split_idx > 0 {
+                                full_answer.push_str(&chunk[..split_idx]);
                                 let _ = stream.write_all(chunk[..split_idx].as_bytes()).await;
                             }
 
@@ -420,6 +436,7 @@ async fn main() -> Result<(), anyhow::Error> {
                             continue;
                         }
 
+                        full_answer.push_str(&chunk);
                         let _ = stream.write_all(chunk.as_bytes()).await;
                     }
 
@@ -428,6 +445,9 @@ async fn main() -> Result<(), anyhow::Error> {
                         continue;
                     }
 
+                    if !is_auto_fix {
+                        remember_chat_turn(&raw_request, &full_answer);
+                    }
                     let _ = stream.write_all(b"__END__").await;
                     let _ = stream.flush().await;
                     break;
@@ -437,12 +457,46 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 }
 
-fn prepare_speech_text(text: &str) -> String {
-    text.replace("`", "")
-        .replace("*sigh*", "huuuuh")
-        .replace("*laughs*", "haha")
-        .trim()
-        .to_string()
+fn clip_chars(text: &str, max: usize) -> String {
+    text.trim().chars().take(max).collect()
+}
+
+fn remember_chat_turn(user: &str, assistant: &str) {
+    if assistant.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut history) = CHAT_HISTORY.lock() {
+        history.push_back((
+            clip_chars(user, CHAT_HISTORY_CHARS),
+            clip_chars(assistant, CHAT_HISTORY_CHARS),
+        ));
+        while history.len() > CHAT_HISTORY_TURNS {
+            history.pop_front();
+        }
+    }
+}
+
+fn chat_history_prompt() -> String {
+    let Ok(history) = CHAT_HISTORY.lock() else {
+        return String::new();
+    };
+    history
+        .iter()
+        .map(|(u, a)| {
+            format!(
+                "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n{}<|im_end|>\n",
+                u, a
+            )
+        })
+        .collect()
+}
+
+// A fresh seed per generation; a fixed seed made Aish say the same thing every time.
+fn fresh_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+        .unwrap_or(1337)
 }
 
 fn run_inference(
@@ -480,7 +534,8 @@ fn run_inference(
     let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
         llama_cpp_2::sampling::LlamaSampler::temp(0.4),
         grammar_sampler,
-        llama_cpp_2::sampling::LlamaSampler::dist(1337),
+        llama_cpp_2::sampling::LlamaSampler::top_p(0.95, 1),
+        llama_cpp_2::sampling::LlamaSampler::dist(fresh_seed()),
     ]);
 
     while n_cur < n_max {
@@ -533,9 +588,12 @@ fn run_inference_silent(
     let mut n_cur = tokens.len() as i32;
     let n_max = n_cur + max_tokens;
 
+    // Spoken lines want variety: warmer temperature, nucleus sampling, fresh seed.
     let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple([
-        llama_cpp_2::sampling::LlamaSampler::temp(0.4),
-        llama_cpp_2::sampling::LlamaSampler::dist(1337),
+        llama_cpp_2::sampling::LlamaSampler::min_p(0.05, 1),
+        llama_cpp_2::sampling::LlamaSampler::temp(0.85),
+        llama_cpp_2::sampling::LlamaSampler::top_p(0.92, 1),
+        llama_cpp_2::sampling::LlamaSampler::dist(fresh_seed()),
     ]);
 
     let mut result = String::new();

@@ -1,3 +1,4 @@
+use crate::voice;
 use kokoro_micro::TtsEngine;
 use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +37,7 @@ pub async fn init_audio_worker() {
 
                     // Queue the audio to the actual hardware speakers
                     if let Some(sink) = sink_handle.lock().unwrap().as_ref() {
-                        sink.append(SamplesBuffer::new(1, 24000, audio_data));
+                        sink.append(SamplesBuffer::new(1, voice::SAMPLE_RATE, audio_data));
                     }
                 }
             }
@@ -93,54 +94,72 @@ pub async fn init_audio_worker() {
     });
 
     // 3. ASYNC TTS GENERATOR TASK
+    // Each reply is split into breath-sized phrases and synthesised one at a
+    // time: the first phrase starts playing while the rest are generated, and
+    // every phrase gets its own speed and a natural pause after it.
     tokio::spawn(async move {
-        println!("  [JARVIS] Pre-loading Neural Voice Engine...");
-        let mut tts = TtsEngine::new().await.expect("Failed to initialize TTS");
+        println!("  [AISH] Pre-loading neural voice engine...");
+        let tts = TtsEngine::new().await.expect("Failed to initialize TTS");
+        let voice_name = voice::voice_name();
+
+        let greeting = voice::greeting(local_hour());
+        voice::remember_spoken(&greeting);
         let boot_gen = GENERATION.load(Ordering::SeqCst);
-        if let Ok(audio_data) = tts.synthesize_with_options(
-            "All systems online.",
-            Some("af_sarah"),
-            1.5,
-            1.0,
-            Some("en"),
-        ) {
-            let _ = audio_tx.send((audio_data, boot_gen));
-        }
+        speak_phrases(&tts, &voice_name, &greeting, boot_gen, &audio_tx);
 
         while let Some((text, gen)) = text_rx.recv().await {
             if gen != GENERATION.load(Ordering::SeqCst) {
                 continue;
             }
-            let (speed, pitch) = speech_params_for(&text);
-            if let Ok(audio_data) =
-                tts.synthesize_with_options(&text, Some("af_sarah"), speed, pitch, Some("en"))
-            {
-                let _ = audio_tx.send((audio_data, gen));
-            }
+            // Synthesis is CPU-bound; keep it off the async scheduler.
+            tokio::task::block_in_place(|| {
+                speak_phrases(&tts, &voice_name, &text, gen, &audio_tx)
+            });
         }
     });
 }
 
-fn speech_params_for(text: &str) -> (f32, f32) {
-    let technical_density = text
-        .split_whitespace()
-        .filter(|w| {
-            w.contains('/')
-                || w.contains('_')
-                || w.contains('.')
-                || w.chars().any(|c| c.is_ascii_digit())
-        })
-        .count();
-    let word_count = text.split_whitespace().count().max(1);
-    let ratio = technical_density as f32 / word_count as f32;
-    if ratio > 0.25 {
-        (1.15, 1.0)
-    } else {
-        (1.35, 1.0)
+fn speak_phrases(
+    tts: &TtsEngine,
+    voice_name: &str,
+    text: &str,
+    gen: u64,
+    audio_tx: &std::sync::mpsc::Sender<(Vec<f32>, u64)>,
+) {
+    let phrases = voice::split_phrases(text);
+    let last = phrases.len().saturating_sub(1);
+    for (i, phrase) in phrases.iter().enumerate() {
+        // Barge-in: the user typed something new, drop the rest of this reply.
+        if gen != GENERATION.load(Ordering::SeqCst) {
+            return;
+        }
+        let speed = voice::speed_for(phrase);
+        if let Ok(raw) =
+            tts.synthesize_with_options(phrase, Some(voice_name), speed, 1.0, Some("en"))
+        {
+            let mut clip = voice::shape_clip(raw);
+            if i < last {
+                clip.extend(voice::silence_ms(voice::pause_after_ms(phrase)));
+            }
+            let _ = audio_tx.send((clip, gen));
+        }
     }
 }
 
+fn local_hour() -> u32 {
+    std::process::Command::new("date")
+        .arg("+%H")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+        .unwrap_or(12)
+}
+
 pub fn speak_stream(text: String) {
+    if text.trim().is_empty() {
+        return;
+    }
+    voice::remember_spoken(&text);
     if let Some(tx) = AUDIO_TX.get() {
         let gen = GENERATION.load(Ordering::SeqCst);
         let _ = tx.try_send((text, gen));
